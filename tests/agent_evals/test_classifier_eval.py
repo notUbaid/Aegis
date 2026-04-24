@@ -84,14 +84,18 @@ def test_classifier_rule_based_meets_expected(scenario: dict) -> None:
     result = _rule_based(inp)
 
     expected = scenario["expected"]
+    # fmt: off
     assert result.category.value == expected["category"], (
-        f"{scenario['id']}: expected {expected['category']} got {result.category.value}"
+        f"{scenario['id']}: expected {expected['category']} "
+        f"got {result.category.value}"
     )
 
     expected_min = Severity(expected["severity_min"])
     assert SEVERITY_RANK[result.severity] <= SEVERITY_RANK[expected_min], (
-        f"{scenario['id']}: expected severity ≤ {expected_min.value} got {result.severity.value}"
+        f"{scenario['id']}: expected severity ≤ {expected_min.value} "
+        f"got {result.severity.value}"
     )
+    # fmt: on
 
 
 @pytest.mark.asyncio

@@ -46,6 +46,11 @@ export default function IncidentDetailPage() {
   const [acting, setActing] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [countdownKey, setCountdownKey] = React.useState(0);
+  const [isMounted, setIsMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   React.useEffect(() => {
     if (!id || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return;
@@ -182,8 +187,14 @@ export default function IncidentDetailPage() {
                 <SeverityBadge severity={severity} />
                 {incident ? <StatusPill status={incident.status} /> : null}
                 <MetaChip label={`Zone · ${incident?.zone_id ?? "Unknown"}`} />
-                <MetaChip label={confidence} />
-                <MetaChip label={`Detected ${formatClock(incident?.detected_at ?? new Date())}`} />
+                 <MetaChip label={confidence} />
+                <MetaChip
+                  label={`Detected ${
+                    isMounted
+                      ? formatClock(incident?.detected_at ?? "2024-01-01T00:00:00Z")
+                      : "--:--:--"
+                  }`}
+                />
               </div>
             </div>
 
@@ -268,13 +279,17 @@ export default function IncidentDetailPage() {
                 <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
                   <SnapshotRow label="Live dispatches" value={String(dispatches.length)} />
                   <SnapshotRow label="Timeline events" value={String(events.length)} />
-                  <SnapshotRow
+                   <SnapshotRow
                     label="Last state change"
-                    value={formatClock(
-                      events[events.length - 1]?.event_time ??
-                        incident?.detected_at ??
-                        new Date(),
-                    )}
+                    value={
+                      isMounted
+                        ? formatClock(
+                            events[events.length - 1]?.event_time ??
+                              incident?.detected_at ??
+                              "2024-01-01T00:00:00Z",
+                          )
+                        : "--:--:--"
+                    }
                   />
                 </div>
               </div>
@@ -358,7 +373,7 @@ export default function IncidentDetailPage() {
                     {incident?.classification?.rationale ||
                       "Classifier rationale will appear here once the incident record syncs."}
                   </div>
-                  <div
+                   <div
                     style={{
                       marginTop: 14,
                       display: "flex",
@@ -366,7 +381,13 @@ export default function IncidentDetailPage() {
                       gap: 8,
                     }}
                   >
-                    <MetaChip label={`Detected ${formatSince(incident?.detected_at ?? new Date())}`} />
+                    <MetaChip
+                      label={`Detected ${
+                        isMounted
+                          ? formatSince(incident?.detected_at ?? "2024-01-01T00:00:00Z")
+                          : "..."
+                      }`}
+                    />
                     <MetaChip label={incident?.incident_id ?? id} />
                     <MetaChip label={incident?.status ?? "Pending sync"} />
                   </div>
@@ -608,7 +629,7 @@ export default function IncidentDetailPage() {
                         }}
                       >
                         <span>{dispatch.dispatch_id}</span>
-                        <span>{formatSince(dispatch.arrived_at ?? dispatch.en_route_at ?? dispatch.acknowledged_at ?? dispatch.paged_at)}</span>
+                        <span>{isMounted ? formatSince(dispatch.arrived_at ?? dispatch.en_route_at ?? dispatch.acknowledged_at ?? dispatch.paged_at) : "..."}</span>
                       </div>
                     </div>
                   ))}

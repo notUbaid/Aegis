@@ -255,6 +255,11 @@ export default function DashboardHome() {
   const [tab, setTab] = React.useState<DashboardTab>("live");
   const [error, setError] = React.useState<string | null>(null);
   const [dispatchError, setDispatchError] = React.useState<string | null>(null);
+  const [isMounted, setIsMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   React.useEffect(() => {
     if (!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) {
@@ -363,7 +368,7 @@ export default function DashboardHome() {
     : 0;
   const venueState =
     criticalCount > 0 ? "Critical" : activeCount > 0 ? "Elevated" : "Nominal";
-  const lastUpdatedAt = historicalFeed[0]?.detected_at ?? new Date().toISOString();
+  const lastUpdatedAt = historicalFeed[0]?.detected_at ?? "2024-01-01T00:00:00Z";
   const selectedRoadmap =
     tab !== "live" && tab !== "history" ? ROADMAP_CONTENT[tab] : null;
 
@@ -606,7 +611,7 @@ export default function DashboardHome() {
                       : "No active incidents. Venue appears nominal right now."}
                 </div>
                 <div className="eyebrow" style={{ marginTop: 8 }}>
-                  Last signal {formatClock(lastUpdatedAt)}
+                  Last signal {isMounted ? formatClock(lastUpdatedAt) : "--:--:--"}
                 </div>
               </div>
             </div>
@@ -816,7 +821,7 @@ export default function DashboardHome() {
                                 }}
                               >
                                 <span>{tile.status}</span>
-                                <span>{formatSince(tile.timestamp)}</span>
+                                <span>{isMounted ? formatSince(tile.timestamp) : "..."}</span>
                               </div>
                             </div>
                           </div>
@@ -901,7 +906,7 @@ export default function DashboardHome() {
                                 }}
                               >
                                 <span>{card.notes || "Awaiting field note"}</span>
-                                <span>{formatSince(card.timestamp)}</span>
+                                <span>{isMounted ? formatSince(card.timestamp) : "..."}</span>
                               </div>
                             </div>
                           </Link>
@@ -1032,7 +1037,7 @@ export default function DashboardHome() {
                                 textAlign: "right",
                               }}
                             >
-                              {formatSince(incident.detected_at)}
+                              {isMounted ? formatSince(incident.detected_at) : "..."}
                             </div>
                           </div>
                         </Link>

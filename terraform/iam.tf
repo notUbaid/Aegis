@@ -25,9 +25,9 @@ resource "google_project_iam_member" "common" {
     for pair in flatten([
       for svc in var.cloud_run_services : [
         for role in local.common_roles : {
-          key    = "${svc}-${role}"
-          svc    = svc
-          role   = role
+          key  = "${svc}-${role}"
+          svc  = svc
+          role = role
         }
       ]
     ]) : pair.key => pair

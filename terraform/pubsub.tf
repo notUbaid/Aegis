@@ -30,8 +30,8 @@ resource "google_pubsub_topic" "topic" {
 }
 
 resource "google_pubsub_topic" "dlq" {
-  for_each = toset(local.topics)
-  name     = "${each.key}-dlq"
+  for_each   = toset(local.topics)
+  name       = "${each.key}-dlq"
   depends_on = [google_project_service.services]
 }
 

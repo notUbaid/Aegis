@@ -5,14 +5,16 @@
       "rootDir": ".",
       "env": {
         "APP_DIR": "apps/staff"
-      }
+      },
+      "alwaysDeployFromSource": true
     },
     {
       "backendId": "aegis-dashboard",
       "rootDir": ".",
       "env": {
         "APP_DIR": "apps/dashboard"
-      }
+      },
+      "alwaysDeployFromSource": true
     }
   ]
 }

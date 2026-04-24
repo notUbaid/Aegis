@@ -3,11 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "description": "Aegis — Agentic safety platform for mass gatherings.",
-  "workspaces": [
-    "apps/staff",
-    "apps/dashboard",
-    "packages/ui-web"
-  ],
   "scripts": {
     "dev:staff": "npm --workspace apps/staff run dev",
     "dev:dashboard": "npm --workspace apps/dashboard run dev",

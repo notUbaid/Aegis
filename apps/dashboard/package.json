@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@aegis/ui-web": "*",
+    "@aegis/ui-web": "file:../../packages/ui-web",
     "firebase": "^12.12.1",
     "next": "^14.2.35",
     "react": "^18.3.1",

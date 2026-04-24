@@ -55,6 +55,7 @@ __YAML__
       --memory 1Gi `
       --cpu 1 `
       --timeout=300 `
+      --service-account "aegis-$name@$Project.iam.gserviceaccount.com" `
       --set-env-vars "AEGIS_ENV=prod,GCP_PROJECT_ID=$Project,GCP_REGION=$Region,VERTEX_AI_LOCATION=$Region"
   }
 }

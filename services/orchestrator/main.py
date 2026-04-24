@@ -67,9 +67,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("orchestrator_service_stopped")
 
 
-app = FastAPI(title="Aegis Orchestrator", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Aegis Orchestrator",
+    version="0.1.0",
+    description="Agentic orchestration for incident detection and response.",
+    lifespan=lifespan,
+)
 
-# CORS middleware handles preflights and adds headers.
+from fastapi import Request, Response
+from fastapi.responses import JSONResponse
+from aegis_shared.errors import AegisError
+
+# 1. CORS middleware (must be early)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -78,6 +87,28 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# 2. Global exception handler to prevent "No CORS header" on 500s
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    log = get_logger(__name__)
+    log.exception("unhandled_exception", path=request.url.path)
+    
+    status_code = 500
+    detail = "Internal Server Error"
+    
+    if isinstance(exc, AegisError):
+        detail = str(exc)
+        
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 # Initialise at import time so ``TestClient(app)`` without a context manager
 # still finds the agent. The agent is cheap to construct.
 app.state.agent = OrchestratorAgent()

@@ -2,11 +2,17 @@
   "apphosting": [
     {
       "backendId": "aegis-staff",
-      "rootDir": "apps/staff"
+      "rootDir": ".",
+      "env": {
+        "APP_DIR": "apps/staff"
+      }
     },
     {
       "backendId": "aegis-dashboard",
-      "rootDir": "apps/dashboard"
+      "rootDir": ".",
+      "env": {
+        "APP_DIR": "apps/dashboard"
+      }
     }
   ]
 }

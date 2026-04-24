@@ -1,0 +1,9 @@
+runConfig:
+  cpu: 1
+  memoryMiB: 512
+
+build:
+  commands:
+    - npm install
+    - cd $APP_DIR
+    - npm run build

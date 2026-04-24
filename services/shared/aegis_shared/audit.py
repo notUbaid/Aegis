@@ -200,8 +200,8 @@ def verify_chain_local() -> tuple[bool, list[str]]:
     prev_by_incident: dict[str, str] = {}
     broken: list[str] = []
     with path.open("r", encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
+        for raw_line in fp:
+            line = raw_line.strip()
             if not line:
                 continue
             event = AuditEvent.model_validate_json(line)

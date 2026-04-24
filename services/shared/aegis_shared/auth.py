@@ -19,6 +19,7 @@ mis-authorises — the principal simply lacks any custom claims.
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -151,7 +152,7 @@ async def verify_request(
     )
 
 
-def require_role(*allowed_roles: str):
+def require_role(*allowed_roles: str) -> Callable[..., Awaitable[Principal]]:
     """Return a FastAPI dependency that enforces role membership."""
     allowed = {r.lower() for r in allowed_roles}
 

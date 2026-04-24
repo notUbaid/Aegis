@@ -32,7 +32,7 @@ class PublishResult:
 @lru_cache(maxsize=1)
 def get_publisher() -> Any:
     """Return a cached Pub/Sub publisher client."""
-    from google.cloud import pubsub_v1  # type: ignore[import-untyped]
+    from google.cloud import pubsub_v1  # type: ignore[import-untyped,attr-defined]
 
     settings = get_settings()
     if settings.using_pubsub_emulator:

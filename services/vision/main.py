@@ -85,7 +85,7 @@ class AnalyzeResponse(BaseModel):
 class PubSubMessage(BaseModel):
     data: str | None = None
     attributes: dict[str, str] | None = None
-    messageId: str | None = None
+    message_id: str | None = Field(default=None, alias="messageId")
 
 
 class PubSubEnvelope(BaseModel):

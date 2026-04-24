@@ -97,7 +97,7 @@ def _derive_required_skills(
 
 
 def _eta_seconds(r: ResponderRecord) -> int:
-    return max(5, int(math.ceil(r.distance_m / WALKING_SPEED_MPS)))
+    return max(5, math.ceil(r.distance_m / WALKING_SPEED_MPS))
 
 
 def _skill_score(r: ResponderRecord, required: Sequence[ResponderSkill]) -> float:

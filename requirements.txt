@@ -1,13 +1,12 @@
-# Editable install with no version control (aegis-dispatch==0.1.0)
--e c:\users\mekha\aegislocal\services\dispatch
-# Editable install with no version control (aegis-ingest==0.1.0)
--e c:\users\mekha\aegislocal\services\ingest
-# Editable install with no version control (aegis-orchestrator==0.1.0)
--e c:\users\mekha\aegislocal\services\orchestrator
-# Editable install with no version control (aegis-shared==0.1.0)
--e c:\users\mekha\aegislocal\services\shared
-# Editable install with no version control (aegis-vision==0.1.0)
--e c:\users\mekha\aegislocal\services\vision
+# Editable installs. Order matters: aegis-shared first (everything depends on
+# it), then aegis-agents (the orchestrator service depends on it), then the
+# per-service packages.
+-e ./services/shared
+-e ./agents
+-e ./services/ingest
+-e ./services/vision
+-e ./services/orchestrator
+-e ./services/dispatch
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0

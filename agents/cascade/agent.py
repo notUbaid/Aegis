@@ -122,7 +122,10 @@ def _heuristic_cascade(inp: CascadeInput) -> CascadeOutput:
                 RecommendedAction(
                     action="stage_fire_service",
                     trigger_horizon_seconds=90,
-                    rationale="Cascade risk to vertical smoke spread warrants staging external responders.",
+                    rationale=(
+                        "Cascade risk to vertical smoke spread warrants "
+                        "staging external responders."
+                    ),
                 )
             )
             actions.append(

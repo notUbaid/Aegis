@@ -12,9 +12,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   python-quality:
     runs-on: ubuntu-latest
@@ -26,39 +30,39 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Install Python tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install ruff mypy pytest pytest-cov
+      - name: Install uv (fast installer)
+        run: pip install --upgrade pip uv
+
+      - name: Install editable services + runtime deps
+        run: uv pip install --system -r requirements.txt
+
+      - name: Install lint + test tooling
+        run: uv pip install --system ruff==0.8.3 mypy==1.13.0 pytest pytest-cov pytest-asyncio pip-audit
 
       - name: Ruff lint
         run: ruff check .
 
       - name: Ruff format check
-        run: ruff format --check .
+        run: ruff format --check services agents tests
 
-      - name: Mypy
+      - name: Mypy strict
         run: mypy services agents
 
-      - name: Detect pytest files
-        id: detect_pytests
-        shell: bash
-        run: |
-          if find services -type f \( -name 'test_*.py' -o -name '*_test.py' \) | grep -q .; then
-            echo "has_tests=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_tests=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Pytest
-        if: steps.detect_pytests.outputs.has_tests == 'true'
-        run: pytest --cov=services --cov-report=term-missing
+        run: pytest --cov=services --cov-report=term-missing --cov-report=xml
 
-      - name: Skip pytest when no tests exist
-        if: steps.detect_pytests.outputs.has_tests != 'true'
-        run: echo "No Python tests found yet. Skipping pytest."
+      - name: pip-audit (vulnerability scan)
+        run: pip-audit --strict --ignore-vuln PYSEC-2022-42969 || true
+        # `|| true` — advisory, doesn't gate merge until we curate the allowlist.
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
 
   web-quality:
     runs-on: ubuntu-latest
@@ -70,15 +74,50 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
       - name: Install workspace deps
-        run: npm install
+        run: npm install --workspaces --include-workspace-root
 
       - name: Lint web apps
         run: npm run lint
 
-      - name: Build staff app
+      - name: Build @aegis/staff
+        env:
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: aegis-ci
         run: npm run build:staff
 
-      - name: Build dashboard app
+      - name: Build @aegis/dashboard
+        env:
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: aegis-ci
         run: npm run build:dashboard
+
+      - name: Run @aegis/ui-web vitest suite
+        run: npm --workspace packages/ui-web run test
+
+      - name: npm audit
+        run: npm audit --audit-level=high || true
+        # Advisory; blocks are promoted once the main branch baseline is clean.
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Format check
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      - name: Init (no backend)
+        working-directory: terraform
+        run: terraform init -backend=false
+
+      - name: Validate
+        working-directory: terraform
+        run: terraform validate

@@ -52,14 +52,14 @@ orchestrator: ## Run orchestrator service locally
 dispatch: ## Run dispatch service locally
 	cd services/dispatch && uvicorn main:app --reload --port 8004
 
-lint: ## Run ruff + mypy across all services
-	ruff check services/
-	ruff format --check services/
-	mypy services/shared services/ingest services/vision services/orchestrator services/dispatch
+lint: ## Run ruff + mypy across all Python code
+	ruff check .
+	ruff format --check .
+	mypy services agents
 
 fmt: ## Auto-format everything
-	ruff format services/
-	ruff check --fix services/
+	ruff format .
+	ruff check --fix .
 
 test: ## Run pytest across all services
 	pytest services/ -v

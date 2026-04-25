@@ -86,26 +86,52 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Aegis Dispatch", version="0.1.0", lifespan=lifespan)
 
-# CORS — staff/responder PWAs call dispatch transitions directly from the browser.
+# 1. CORS middleware (must be early)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
 
+@app.exception_handler(AegisError)
+async def aegis_exception_handler(request: Request, exc: AegisError) -> JSONResponse:
+    log = get_logger(__name__)
+    log.error("aegis_error", path=request.url.path, category=exc.audit_category, detail=str(exc))
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={"detail": str(exc), "category": exc.audit_category},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    log_exc = get_logger(__name__)
-    log_exc.exception("unhandled_exception", path=request.url.path)
-    detail = "Internal Server Error"
-    if isinstance(exc, AegisError):
-        detail = str(exc)
+    log = get_logger(__name__)
+    from fastapi import HTTPException as FastAPIHTTPException
+    from fastapi.exceptions import RequestValidationError
+
+    status_code = 500
+    detail: Any = "Internal Server Error"
+
+    if isinstance(exc, FastAPIHTTPException):
+        status_code = exc.status_code
+        detail = exc.detail
+    elif isinstance(exc, RequestValidationError):
+        status_code = 422
+        detail = exc.errors()
+    else:
+        log.exception("unhandled_exception", path=request.url.path)
+
     return JSONResponse(
-        status_code=500,
+        status_code=status_code,
         content={"detail": detail},
         headers={
             "Access-Control-Allow-Origin": "*",

@@ -120,3 +120,4 @@ generated/
 !.secrets/README.md
 .secrets/*
 !.secrets/README.md
+*.tgz

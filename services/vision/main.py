@@ -68,23 +68,44 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
 
-# 2. Global exception handler to prevent "No CORS header" on 500s
+@app.exception_handler(AegisError)
+async def aegis_exception_handler(request: Request, exc: AegisError) -> JSONResponse:
+    log = get_logger(__name__)
+    log.error("aegis_error", path=request.url.path, category=exc.audit_category, detail=str(exc))
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={"detail": str(exc), "category": exc.audit_category},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     log = get_logger(__name__)
-    log.exception("unhandled_exception", path=request.url.path)
+    from fastapi import HTTPException as FastAPIHTTPException
+    from fastapi.exceptions import RequestValidationError
 
     status_code = 500
-    detail = "Internal Server Error"
+    detail: Any = "Internal Server Error"
 
-    if isinstance(exc, AegisError):
-        detail = str(exc)
+    if isinstance(exc, FastAPIHTTPException):
+        status_code = exc.status_code
+        detail = exc.detail
+    elif isinstance(exc, RequestValidationError):
+        status_code = 422
+        detail = exc.errors()
+    else:
+        log.exception("unhandled_exception", path=request.url.path)
 
     return JSONResponse(
         status_code=status_code,

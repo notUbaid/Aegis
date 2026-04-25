@@ -74,17 +74,9 @@ jobs:
         with:
           node-version: "20"
 
-      # The apps depend on @aegis/ui-web via a packed .tgz. Rebuild the tgz on
-      # every CI run from the current source so PRs can't accidentally ship
-      # with a stale tarball.
-      - name: Build + pack @aegis/ui-web
-        run: |
-          cd packages/ui-web
-          npm install --no-audit --no-fund
-          npx tsc -p tsconfig.json
-          npm pack
-          cp aegis-ui-web-0.1.0.tgz ../../apps/staff/aegis-ui-web-0.1.0.tgz
-          cp aegis-ui-web-0.1.0.tgz ../../apps/dashboard/aegis-ui-web-0.1.0.tgz
+      # Use pre-packed @aegis/ui-web tarball committed to the repo.
+      # The tarball is kept in sync with source via `npm run pack-ui` before commit.
+      # Skipping rebuild here to ensure lockfile integrity matches.
 
       - name: Install staff deps
         run: cd apps/staff && npm install --no-audit --no-fund

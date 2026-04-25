@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { getDb, type Incident, type IncidentStatus, type Severity } from "@aegis/ui-web";
 import {
   collection,
@@ -9,10 +10,8 @@ import {
   where,
   type QueryConstraint,
 } from "firebase/firestore";
-import { useRouter } from "next/navigation";
 import { VENUE, SEV_LABEL, zoneById, responderById } from "@/lib/venue";
 import { useUI } from "@/lib/ui";
-import { callDispatch, checkHealth, checkAllHealth, pageResponder, runDrill } from "./actions";
 
 const DISPATCH_BASE = process.env.NEXT_PUBLIC_DISPATCH_URL || "http://localhost:8004";
 const ORCH_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:8003";
@@ -44,11 +43,11 @@ export function useIncidents(venueId: string, statusFilter?: string) {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const items = snap.docs.map((d) => ({
+        let items = snap.docs.map((d) => ({
           ...d.data(),
         })) as Incident[];
         if (statusFilter) {
-          items.filter((i) => i.status === statusFilter);
+          items = items.filter((i) => i.status === statusFilter);
         }
         setIncidents(items);
         setLoading(false);
@@ -59,16 +58,127 @@ export function useIncidents(venueId: string, statusFilter?: string) {
       },
     );
     return unsub;
-  }, [venueId, statusFilter]);
+  }, [venueId, statusFilter, error]);
 
   return { incidents, loading };
 }
 
 // NOTE: Incident state transitions (acknowledge/dismiss/resolve/escalate) are
-// now handled via backend API calls (callDispatch, etc.) — not direct Firestore.
+// now handled via backend API calls — not direct Firestore.
 // The backend services update incidents via Admin SDK.
 
-// ── Health checks ───────────────────────────────────────────────────────────
+// ── Incident state mutation APIs ───────────────────────────────────────────
+export async function acknowledgeIncident(incident: Incident, actor = "operator-w") {
+  const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/ack`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`acknowledge failed: ${res.status} ${txt}`);
+  }
+}
+
+export async function dismissIncident(incident: Incident, actor = "operator-w") {
+  const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "DISMISSED", actor_id: actor, reason: "false_positive" }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`dismiss failed: ${res.status} ${txt}`);
+  }
+}
+
+export async function resolveIncident(incident: Incident, actor = "operator-w") {
+  const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "CLOSED", actor_id: actor }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`resolve failed: ${res.status} ${txt}`);
+  }
+}
+
+export async function escalateIncident(
+  incident: Incident,
+  authorities: string[],
+  actor = "operator-w",
+) {
+  const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      status: "DISPATCHED",
+      actor_id: actor,
+      escalated: true,
+      authorities,
+      sendai_packet: true,
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`escalate failed: ${res.status} ${txt}`);
+  }
+}
+
+export async function addOperatorNote(incidentId: string, text: string, actor = "operator-w") {
+  const res = await fetch(`${ORCH_BASE}/v1/incidents/${incidentId}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event_type: "NOTE",
+      actor_type: "operator",
+      actor_id: actor,
+      payload: { note: text },
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`add note failed: ${res.status} ${txt}`);
+  }
+}
+
+// ── Dispatch API calls ────────────────────────────────────────────────────
+export type DispatchAction = "ack" | "enroute" | "arrived" | "handoff" | "decline";
+
+export async function callDispatch(dispatchId: string, action: DispatchAction): Promise<void> {
+  const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${dispatchId}/${action}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`dispatch ${action} failed: ${res.status} ${txt}`);
+  }
+}
+
+export interface PageRequest {
+  incident_id: string;
+  venue_id: string;
+  responder_id: string;
+  role: string;
+  severity: Severity;
+  category: string;
+  zone_id: string;
+  rationale: string;
+}
+
+export async function pageResponder(req: PageRequest): Promise<{ dispatch_id: string }> {
+  const res = await fetch(`${DISPATCH_BASE}/v1/dispatches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...req, fcm_tokens: [] }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`page responder failed: ${res.status} ${txt}`);
+  }
+  return (await res.json()) as { dispatch_id: string };
+}
+
+// ── Health checks ─────────────────────────────────────────────────────────
 export async function checkHealth(svc: ServiceName, signal?: AbortSignal): Promise<boolean> {
   try {
     const res = await fetch(`${SERVICE_BASES[svc]}/health`, { signal, cache: "no-store" });
@@ -101,7 +211,7 @@ export const SERVICE_PORTS: Record<ServiceName, number> = {
   dispatch: 8004,
 };
 
-// ── Drill: full pipeline ───────────────────────────────────────────────────
+// ── Drill: full pipeline ──────────────────────────────────────────────────
 export interface DrillStep {
   label: string;
   status: "pending" | "running" | "ok" | "error";

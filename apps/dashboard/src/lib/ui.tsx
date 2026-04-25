@@ -25,6 +25,7 @@ interface ConfirmSpec {
 
 interface UICtx {
   toast: (msg: string, opts?: { title?: string; tone?: Tone; duration?: number }) => void;
+  error: (msg: string, opts?: { title?: string }) => void;
   confirm: (opts: Omit<ConfirmSpec, "id" | "resolve">) => Promise<boolean>;
 }
 
@@ -66,6 +67,10 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => dismiss(id), duration);
   }, [dismiss]);
 
+  const error = React.useCallback<UICtx["error"]>((msg, opts) => {
+    toast(msg, { tone: "danger", title: opts?.title ?? "Error", duration: 8000 });
+  }, [toast]);
+
   const confirm = React.useCallback<UICtx["confirm"]>((opts) => {
     return new Promise<boolean>((resolve) => {
       const id = ++idRef.current;
@@ -81,9 +86,9 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  return (
-    <Ctx.Provider value={{ toast, confirm }}>
-      {children}
+   return (
+     <Ctx.Provider value={{ toast, error, confirm }}>
+       {children}
       {mounted ? createPortal(
         <>
           <div

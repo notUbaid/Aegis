@@ -101,9 +101,13 @@ service cloud.firestore {
           || isDevMode()
         );
 
-        // Responder ack updates (unchanged)
+        // Responder ack updates.
+        // The responder_id field stores an RSP-* string ("RSP-meera") which is
+        // not the same as request.auth.uid (a Firebase UID).  We bridge them by
+        // looking up the signed-in user's profile document and comparing its
+        // stored responder_id to the dispatch's responder_id.
         allow update: if subcollection == 'dispatches'
-          && resource.data.responder_id == request.auth.uid
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.responder_id == resource.data.responder_id
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['acknowledged_at', 'en_route_at', 'arrived_at', 'notes', 'status']);
 
@@ -115,7 +119,9 @@ service cloud.firestore {
     // ========== Users ==========
     match /users/{uid} {
       allow read, update: if isSignedIn() && request.auth.uid == uid;
-      allow create: if false;
+      // Allow the user to create their own profile document on first sign-in.
+      // The uid path segment is enforced so users cannot impersonate each other.
+      allow create: if isSignedIn() && request.auth.uid == uid;
       allow delete: if false;
 
       match /devices/{deviceId} {

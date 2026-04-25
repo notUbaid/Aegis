@@ -3,6 +3,7 @@ import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import { UIProvider } from "@/lib/ui";
+import { AuthProvider } from "@aegis/ui-web";
 
 const bodyFont = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -40,7 +41,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${bodyFont.variable} ${monoFont.variable}`}>
       <body>
-        <UIProvider>{children}</UIProvider>
+        <UIProvider><AuthProvider>{children}</AuthProvider></UIProvider>
       </body>
     </html>
   );

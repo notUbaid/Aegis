@@ -71,9 +71,7 @@ apply_security_middleware(app)
 @app.exception_handler(AegisError)
 async def aegis_exception_handler(request: Request, exc: AegisError) -> JSONResponse:
     log = get_logger(__name__)
-    log.error(
-        "aegis_error", path=request.url.path, category=exc.audit_category, detail=str(exc)
-    )
+    log.error("aegis_error", path=request.url.path, category=exc.audit_category, detail=str(exc))
     return JSONResponse(
         status_code=exc.http_status,
         content={"detail": str(exc), "category": exc.audit_category},

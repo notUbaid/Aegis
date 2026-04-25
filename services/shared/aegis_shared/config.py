@@ -79,11 +79,13 @@ class Settings(BaseSettings):
     # ---------- Security ----------
     service_internal_secret: str = Field(default="change-me")
     webhook_signing_key: str | None = Field(default=None)
+    # CORS origins for the API. Default is permissive for local dev; in production
+    # set via environment variable (comma-separated) to the specific frontend URLs.
     cors_allowed_origins: list[str] = Field(
         default=[
-            "*",
-            "https://aegis-dashboard--aegis-gsc-2026.asia-southeast1.hosted.app",
-            "https://aegis-staff--aegis-gsc-2026.asia-southeast1.hosted.app",
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://localhost:3002",
         ]
     )
 

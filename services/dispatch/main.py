@@ -45,8 +45,8 @@ from aegis_shared.schemas import (
     PubSubEnvelope,
     new_id,
 )
+from aegis_shared.security import apply_security_middleware
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -86,15 +86,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Aegis Dispatch", version="0.1.0", lifespan=lifespan)
 
-# 1. CORS middleware (must be early)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+# Apply CORS + security headers middleware
+apply_security_middleware(app)
 
 
 @app.exception_handler(AegisError)
@@ -104,11 +97,6 @@ async def aegis_exception_handler(request: Request, exc: AegisError) -> JSONResp
     return JSONResponse(
         status_code=exc.http_status,
         content={"detail": str(exc), "category": exc.audit_category},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
     )
 
 
@@ -133,11 +121,6 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     return JSONResponse(
         status_code=status_code,
         content={"detail": detail},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
     )
 
 

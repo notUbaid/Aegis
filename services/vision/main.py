@@ -36,8 +36,8 @@ from aegis_shared.schemas import (
     VisionClassification,
     VisionEvidence,
 )
+from aegis_shared.security import apply_security_middleware
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -64,29 +64,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 1. CORS middleware (must be early)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+# Apply CORS + security headers middleware
+apply_security_middleware(app)
 
 
 @app.exception_handler(AegisError)
 async def aegis_exception_handler(request: Request, exc: AegisError) -> JSONResponse:
     log = get_logger(__name__)
-    log.error("aegis_error", path=request.url.path, category=exc.audit_category, detail=str(exc))
+    log.error(
+        "aegis_error", path=request.url.path, category=exc.audit_category, detail=str(exc)
+    )
     return JSONResponse(
         status_code=exc.http_status,
         content={"detail": str(exc), "category": exc.audit_category},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
     )
 
 
@@ -111,11 +101,6 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     return JSONResponse(
         status_code=status_code,
         content={"detail": detail},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
     )
 
 

@@ -145,118 +145,24 @@ class DispatcherAgent:
 
     async def run(self, inp: DispatcherInput) -> DispatcherOutput:
         required = _derive_required_skills(inp.classification, inp.required_skills)
-        max_eta = inp.max_eta_seconds
 
-        # Hard filter.
-        pool: list[tuple[ResponderRecord, float, int]] = []
-        for r in inp.responders:
-            if not r.on_shift or not r.credential_valid:
-                continue
-            eta = _eta_seconds(r)
-            if eta > max_eta:
-                continue
-            if required and _skill_score(r, required) == 0:
-                continue
-            score = _composite_score(r, required, inp.language_preferences, max_eta)
-            pool.append((r, score, eta))
-
+        # 1. Hard filter and initial scoring
+        pool = self._filter_and_score(inp, required)
         if not pool:
             return DispatcherOutput(
                 incident_id=inp.incident_id,
                 rationale="No eligible responders after filtering.",
             )
 
-        pool.sort(key=lambda x: x[1], reverse=True)
-        top = pool[:3]
+        # 2. Gemini re-ranking
+        ordered_ids, rerank_rationale, used_gemini = await self._rerank_if_needed(
+            inp, required, pool
+        )
 
-        used_gemini = False
-        rerank_rationale = ""
-        ordered_ids = [r.responder_id for r, _, _ in top]
-
-        if len(top) > 1 and inp.classification.severity in (
-            Severity.S1_CRITICAL,
-            Severity.S2_URGENT,
-        ):
-            candidates_desc = "\n".join(
-                f"- id={r.responder_id} name={r.display_name} role={r.role} "
-                f"skills={[s.value for s in r.skills]} languages={r.languages} "
-                f"eta_s={eta} workload={r.workload}"
-                for r, _score, eta in top
-            )
-            prompt = (
-                f"Incident: {inp.classification.model_dump(mode='json')}\n"
-                f"Language preferences: {list(inp.language_preferences)}\n"
-                f"Required skills: {[s.value for s in required]}\n"
-                f"Candidates:\n{candidates_desc}"
-            )
-            try:
-                system_text, prompt_hash = _rerank_system_prompt()
-                rerank = await self._client.generate_structured(
-                    prompt,
-                    schema=_GeminiRerank,
-                    model="flash",
-                    system_instruction=system_text,
-                    temperature=0.1,
-                )
-                log.info(
-                    "dispatcher_rerank_prompt",
-                    prompt_hash=prompt_hash,
-                    version=self.version,
-                )
-                known = {r.responder_id for r, _, _ in top}
-                filtered = [rid for rid in rerank.ordered_responder_ids if rid in known]
-                if filtered:
-                    ordered_ids = filtered
-                used_gemini = True
-                rerank_rationale = rerank.rationale
-            except AegisError as exc:
-                log.warning("dispatcher_rerank_failed", error=str(exc))
-
-        dispatched: list[DispatchEntry] = []
-        backup: list[DispatchEntry] = []
-
-        # Primary: take top 1 for S2+; for S1 take top 2 (parallel dispatch).
-        primary_n = 2 if inp.classification.severity == Severity.S1_CRITICAL else 1
-        by_id = {r.responder_id: (r, score, eta) for r, score, eta in pool}
-        primary_ids = ordered_ids[:primary_n]
-        for rid in primary_ids:
-            r, score, eta = by_id[rid]
-            dispatched.append(
-                DispatchEntry(
-                    responder_id=rid,
-                    role=r.role,
-                    score=round(score, 3),
-                    eta_seconds=eta,
-                    rationale=f"Top composite score for {r.display_name}.",
-                )
-            )
-
-        # Backup ladder honours the Gemini reranking: prefer the next IDs from
-        # ``ordered_ids`` (i.e., from the considered top-3) and fall through to
-        # the remaining pool entries by composite score, skipping anyone
-        # already promoted to primary.
-        used_ids: set[str] = set(primary_ids)
-        backup_candidates: list[tuple[ResponderRecord, float, int]] = []
-        for rid in ordered_ids[primary_n:]:
-            if rid in used_ids:
-                continue
-            backup_candidates.append(by_id[rid])
-            used_ids.add(rid)
-        for r, score, eta in pool:
-            if r.responder_id in used_ids:
-                continue
-            backup_candidates.append((r, score, eta))
-            used_ids.add(r.responder_id)
-        for r, score, eta in backup_candidates[:2]:
-            backup.append(
-                DispatchEntry(
-                    responder_id=r.responder_id,
-                    role=r.role,
-                    score=round(score, 3),
-                    eta_seconds=eta,
-                    rationale="Backup candidate.",
-                )
-            )
+        # 3. Final selection
+        dispatched, backup = self._select_responders(
+            inp.classification.severity, pool, ordered_ids
+        )
 
         rationale = rerank_rationale or (
             f"Ranked {len(pool)} eligible responders; dispatched "
@@ -270,3 +176,126 @@ class DispatcherAgent:
             rationale=rationale,
             used_gemini=used_gemini,
         )
+
+    def _filter_and_score(
+        self, inp: DispatcherInput, required: list[ResponderSkill]
+    ) -> list[tuple[ResponderRecord, float, int]]:
+        """Applies hard filters and calculates initial composite scores."""
+        pool: list[tuple[ResponderRecord, float, int]] = []
+        for r in inp.responders:
+            if not r.on_shift or not r.credential_valid:
+                continue
+            eta = _eta_seconds(r)
+            if eta > inp.max_eta_seconds:
+                continue
+            if required and _skill_score(r, required) == 0:
+                continue
+            score = _composite_score(
+                r, required, inp.language_preferences, inp.max_eta_seconds
+            )
+            pool.append((r, score, eta))
+
+        pool.sort(key=lambda x: x[1], reverse=True)
+        return pool
+
+    async def _rerank_if_needed(
+        self,
+        inp: DispatcherInput,
+        required: list[ResponderSkill],
+        pool: list[tuple[ResponderRecord, float, int]],
+    ) -> tuple[list[str], str, bool]:
+        """Optionally invokes Gemini to re-rank the top candidates based on context."""
+        top = pool[:3]
+        ordered_ids = [r.responder_id for r, _, _ in top]
+
+        if len(top) <= 1 or inp.classification.severity not in (
+            Severity.S1_CRITICAL,
+            Severity.S2_URGENT,
+        ):
+            return ordered_ids, "", False
+
+        candidates_desc = "\n".join(
+            f"- id={r.responder_id} name={r.display_name} role={r.role} "
+            f"skills={[s.value for s in r.skills]} languages={r.languages} "
+            f"eta_s={eta} workload={r.workload}"
+            for r, _score, eta in top
+        )
+        prompt = (
+            f"Incident: {inp.classification.model_dump(mode='json')}\n"
+            f"Language preferences: {list(inp.language_preferences)}\n"
+            f"Required skills: {[s.value for s in required]}\n"
+            f"Candidates:\n{candidates_desc}"
+        )
+
+        try:
+            system_text, prompt_hash = _rerank_system_prompt()
+            rerank = await self._client.generate_structured(
+                prompt,
+                schema=_GeminiRerank,
+                model="flash",
+                system_instruction=system_text,
+                temperature=0.1,
+            )
+            log.info(
+                "dispatcher_rerank_prompt",
+                prompt_hash=prompt_hash,
+                version=self.version,
+            )
+            known = {r.responder_id for r, _, _ in top}
+            filtered = [rid for rid in rerank.ordered_responder_ids if rid in known]
+            return filtered or ordered_ids, rerank.rationale, True
+        except AegisError as exc:
+            log.warning("dispatcher_rerank_failed", error=str(exc))
+            return ordered_ids, "", False
+
+    def _select_responders(
+        self,
+        severity: Severity,
+        pool: list[tuple[ResponderRecord, float, int]],
+        ordered_ids: list[str],
+    ) -> tuple[list[DispatchEntry], list[DispatchEntry]]:
+        """Selects primary responders and fills the backup ladder."""
+        dispatched: list[DispatchEntry] = []
+        backup: list[DispatchEntry] = []
+
+        primary_n = 2 if severity == Severity.S1_CRITICAL else 1
+        by_id = {r.responder_id: (r, score, eta) for r, score, eta in pool}
+        primary_ids = ordered_ids[:primary_n]
+
+        for rid in primary_ids:
+            r, score, eta = by_id[rid]
+            dispatched.append(
+                DispatchEntry(
+                    responder_id=rid,
+                    role=r.role,
+                    score=round(score, 3),
+                    eta_seconds=eta,
+                    rationale=f"Top composite score for {r.display_name}.",
+                )
+            )
+
+        used_ids = set(primary_ids)
+        backup_candidates: list[tuple[ResponderRecord, float, int]] = []
+        for rid in ordered_ids[primary_n:]:
+            if rid not in used_ids:
+                backup_candidates.append(by_id[rid])
+                used_ids.add(rid)
+
+        for r, score, eta in pool:
+            if r.responder_id not in used_ids:
+                backup_candidates.append((r, score, eta))
+                used_ids.add(r.responder_id)
+
+        for r, score, eta in backup_candidates[:2]:
+            backup.append(
+                DispatchEntry(
+                    responder_id=r.responder_id,
+                    role=r.role,
+                    score=round(score, 3),
+                    eta_seconds=eta,
+                    rationale="Backup candidate.",
+                )
+            )
+
+        return dispatched, backup
+

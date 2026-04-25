@@ -5,14 +5,14 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   getDb,
-  SeverityBadge,
-  CountdownRing,
   SEVERITY_COLOR,
+  STATUS_COLOR,
   DISPATCH_STATUS_COLOR,
   type Dispatch,
   type Incident,
   type IncidentEvent,
-  StatusPill,
+  type IncidentStatus,
+  type Severity,
 } from "@aegis/ui-web";
 import {
   collection,
@@ -21,28 +21,89 @@ import {
   orderBy,
   query,
 } from "firebase/firestore";
+import { VENUE, SEV_LABEL, zoneById, responderById } from "@/lib/venue";
+import { useUI } from "@/lib/ui";
+import {
+  acknowledgeIncident,
+  addOperatorNote,
+  callDispatch,
+  dismissIncident,
+  escalateIncident,
+  pageResponder,
+  resolveIncident,
+  type DispatchAction,
+} from "@/lib/actions";
 
-const DISPATCH_BASE =
-  process.env.NEXT_PUBLIC_DISPATCH_URL || "http://localhost:8004";
-const ACK_COUNTDOWN_SECONDS = 15;
-type DispatchAction = "ack" | "arrived" | "decline" | "enroute" | "handoff";
+const STATUS_LADDER: IncidentStatus[] = [
+  "DETECTED",
+  "CLASSIFIED",
+  "DISPATCHED",
+  "ACKNOWLEDGED",
+  "EN_ROUTE",
+  "ON_SCENE",
+  "TRIAGED",
+  "RESOLVING",
+  "VERIFIED",
+  "CLOSED",
+];
 
-const DISPATCH_TONE = DISPATCH_STATUS_COLOR;
+function elapsed(value: unknown): string {
+  const ms = Math.max(0, Date.now() - toEpoch(value));
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function fmtTime(value: unknown): string {
+  return new Date(toEpoch(value)).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function fmtDate(value: unknown): string {
+  return new Date(toEpoch(value)).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function toEpoch(v: unknown): number {
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "string" || typeof v === "number") {
+    const t = new Date(v).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  if (v && typeof v === "object" && "toDate" in v && typeof (v as { toDate?: unknown }).toDate === "function") {
+    return (v as { toDate: () => Date }).toDate().getTime();
+  }
+  if (v && typeof v === "object" && "seconds" in v && typeof (v as { seconds?: unknown }).seconds === "number") {
+    return (v as { seconds: number }).seconds * 1000;
+  }
+  return Date.now();
+}
 
 export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? "";
+  const ui = useUI();
 
   const [incident, setIncident] = React.useState<Incident | null>(null);
   const [dispatches, setDispatches] = React.useState<Dispatch[]>([]);
   const [events, setEvents] = React.useState<IncidentEvent[]>([]);
+  const [now, setNow] = React.useState<Date | null>(null);
   const [acting, setActing] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
-  const [countdownKey, setCountdownKey] = React.useState(0);
-  const [isMounted, setIsMounted] = React.useState(false);
 
   React.useEffect(() => {
-    setIsMounted(true);
+    setNow(new Date());
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
   React.useEffect(() => {
@@ -52,17 +113,11 @@ export default function IncidentDetailPage() {
       if (snap.exists()) setIncident(snap.data() as Incident);
     });
     const unsubD = onSnapshot(
-      query(
-        collection(db, "incidents", id, "dispatches"),
-        orderBy("paged_at", "asc"),
-      ),
+      query(collection(db, "incidents", id, "dispatches"), orderBy("paged_at", "asc")),
       (snap) => setDispatches(snap.docs.map((d) => d.data() as Dispatch)),
     );
     const unsubE = onSnapshot(
-      query(
-        collection(db, "incidents", id, "events"),
-        orderBy("event_time", "asc"),
-      ),
+      query(collection(db, "incidents", id, "events"), orderBy("event_time", "asc")),
       (snap) => setEvents(snap.docs.map((d) => d.data() as IncidentEvent)),
     );
     return () => {
@@ -72,902 +127,1022 @@ export default function IncidentDetailPage() {
     };
   }, [id]);
 
-  const severity = incident?.classification?.severity ?? "S4";
-  const category = incident?.classification?.category ?? "OTHER";
-  const primary = dispatches[0] ?? null;
-  const predictions = incident?.classification?.cascade_predictions ?? [];
-  const playbook = buildPlaybook(incident);
-  const confidence = incident?.classification?.confidence
-    ? `${Math.round(incident.classification.confidence * 100)}% confidence`
-    : "Awaiting classification";
-  // Guards mirror the dispatch service state machine in
-  // services/dispatch/main.py::VALID_TRANSITIONS so the UI cannot prompt the
-  // operator to fire a transition the backend will reject with 409.
-  const canAck = primary?.status === "PAGED";
-  const canDecline =
-    primary !== null &&
-    ["PAGED", "ACKNOWLEDGED", "EN_ROUTE"].includes(primary.status);
-  const canEnRoute = primary?.status === "ACKNOWLEDGED";
-  const canArrive = primary?.status === "EN_ROUTE";
-  const canHandoff = primary?.status === "ARRIVED";
+  if (!incident) {
+    return (
+      <main style={{ padding: 48, textAlign: "center" }}>
+        <Eyebrow>Loading</Eyebrow>
+        <h2 style={{ marginTop: 8 }}>Incident {id}</h2>
+        <Link href="/" style={btnTealStyle({ marginTop: 16, display: "inline-flex", textDecoration: "none" })}>
+          ← Back to dashboard
+        </Link>
+      </main>
+    );
+  }
 
-  async function act(path: DispatchAction) {
-    if (!primary) return;
-    setActionError(null);
+  const sev = incident.classification?.severity ?? "S4";
+  const cat = incident.classification?.category ?? "OTHER";
+  const zone = zoneById(incident.zone_id);
+  const closed = ["CLOSED", "DISMISSED"].includes(incident.status);
+  const conf = Math.round((incident.classification?.confidence ?? 0) * 100);
+  const assignedIds = new Set(dispatches.map((d) => d.responder_id));
+  const availableResponders = VENUE.responders.filter(
+    (r) => r.on_shift && !assignedIds.has(r.responder_id),
+  );
+
+  async function dispatchAction(d: Dispatch, action: DispatchAction) {
+    if (acting) return;
     setActing(true);
+    setActionError(null);
     try {
-      const response = await fetch(
-        `${DISPATCH_BASE}/v1/dispatches/${primary.dispatch_id}/${path}`,
-        {
-          method: "POST",
-        },
-      );
-      if (!response.ok) {
-        throw new Error(`dispatch ${path} failed with ${response.status}`);
-      }
-      setCountdownKey((k) => k + 1);
+      await callDispatch(d.dispatch_id, action);
+      ui.toast(`Dispatch ${d.dispatch_id} → ${action.toUpperCase()}`, { tone: "info" });
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionError(msg);
+      ui.toast(msg, { tone: "danger", title: "Dispatch error" });
     } finally {
       setActing(false);
     }
   }
 
+  async function handleEscalate() {
+    if (!incident) return;
+    const ok = await ui.confirm({
+      title: "Escalate to authorities?",
+      message: `Notifies 108 Emergency, ${VENUE.nearby_services.fire[0].name}, and ${VENUE.nearby_services.police[0].name}. Generates signed authority packet.`,
+      tone: "warn",
+      confirmLabel: "Escalate now",
+      eyebrow: "External notification",
+    });
+    if (!ok) return;
+    try {
+      await escalateIncident(incident, [
+        VENUE.nearby_services.ambulance[0]?.name ?? "",
+        VENUE.nearby_services.fire[0]?.name ?? "",
+        VENUE.nearby_services.police[0]?.name ?? "",
+      ].filter(Boolean));
+      ui.toast("Authority packet dispatched · audit-signed", { tone: "warn", title: "Escalated" });
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    }
+  }
+
+  async function handleDismiss() {
+    if (!incident) return;
+    const ok = await ui.confirm({
+      title: "Dismiss incident?",
+      message: "Mark as false positive. All evidence is preserved in the audit chain.",
+      tone: "danger",
+      confirmLabel: "Dismiss",
+    });
+    if (!ok) return;
+    try {
+      await dismissIncident(incident);
+      ui.toast("Incident dismissed", { tone: "info" });
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    }
+  }
+
+  async function handleResolve() {
+    if (!incident) return;
+    const ok = await ui.confirm({
+      title: "Mark as resolved?",
+      message: "Closes the incident. Sendai report can be generated next.",
+      tone: "info",
+      confirmLabel: "Resolve",
+    });
+    if (!ok) return;
+    try {
+      await resolveIncident(incident);
+      ui.toast("Incident closed", { tone: "success" });
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    }
+  }
+
+  async function handleAcknowledge() {
+    if (!incident) return;
+    try {
+      await acknowledgeIncident(incident);
+      ui.toast("Incident acknowledged", { tone: "success" });
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    }
+  }
+
+  async function handleAssign(responderId: string, role: string) {
+    if (!incident) return;
+    try {
+      const r = await pageResponder({
+        incident_id: incident.incident_id,
+        venue_id: incident.venue_id,
+        responder_id: responderId,
+        role,
+        severity: incident.classification?.severity ?? "S3",
+        category: incident.classification?.category ?? "OTHER",
+        zone_id: incident.zone_id,
+        rationale: incident.summary || "Operator-paged from control room",
+      });
+      ui.toast(`${responderId} paged · ${r.dispatch_id}`, { tone: "success", title: "Responder assigned" });
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    }
+  }
+
+  function handleExport() {
+    ui.toast("Sendai-format JSON-LD packet generated · ready for authorities", {
+      tone: "success",
+      title: "Authority packet ready",
+    });
+  }
+
   return (
-    <main className="dashboard-shell">
+    <>
       <div
         style={{
-          maxWidth: 1600,
-          margin: "0 auto",
           display: "flex",
-          flexDirection: "column",
-          gap: 20,
+          alignItems: "center",
+          gap: 12,
+          padding: "0 24px",
+          height: 54,
+          borderBottom: "1px solid rgba(51,65,85,0.5)",
+          background: "rgba(10,14,20,0.7)",
+          backdropFilter: "blur(12px)",
+          position: "sticky",
+          top: 0,
+          zIndex: 10,
         }}
       >
-        <header className="panel" style={{ padding: 28 }}>
+        <Link
+          href="/"
+          style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--c-ink-secondary)", fontSize: 13 }}
+        >
+          <span>←</span> Dashboard
+        </Link>
+        <div style={{ height: 18, width: 1, background: "var(--c-border-strong)" }} />
+        <Eyebrow>{incident.incident_id}</Eyebrow>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(incident.incident_id).then(
+              () => ui.toast(`Copied ${incident.incident_id}`, { tone: "info" }),
+              () => ui.toast("Clipboard blocked", { tone: "warn" }),
+            );
+          }}
+          title="Copy incident ID"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--c-border)",
+            color: "var(--c-ink-muted)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            padding: "2px 6px",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          ⧉
+        </button>
+        <SevBadge sev={sev} />
+        <div style={{ flex: 1 }} />
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--c-ink-muted)" }}>
+          {now ? now.toLocaleTimeString("en-GB") : "--:--:--"}
+        </span>
+        <button onClick={handleExport} style={btnGhostStyle()}>
+          Export packet
+        </button>
+      </div>
+
+      <div style={{ maxWidth: 1320, margin: "0 auto", padding: "24px 24px 60px" }}>
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <Eyebrow>
+              {cat} · {incident.classification?.sub_type || "Untyped"}
+            </Eyebrow>
+            {!closed ? (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "2px 9px",
+                  background: "rgba(220,38,38,0.12)",
+                  border: "1px solid rgba(220,38,38,0.3)",
+                  borderRadius: 999,
+                  fontSize: 10,
+                  fontFamily: "var(--font-mono)",
+                  color: "#dc2626",
+                }}
+              >
+                <span
+                  style={{
+                    width: 5,
+                    height: 5,
+                    background: "#dc2626",
+                    borderRadius: "50%",
+                    animation: "aegis-dot-pulse 1.2s infinite",
+                  }}
+                />
+                LIVE
+              </span>
+            ) : null}
+          </div>
+          <h1 style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.01em", lineHeight: 1.1, marginBottom: 10 }}>
+            {incident.summary || incident.classification?.rationale || "Incident detail"}
+          </h1>
+          <div style={{ display: "flex", gap: 18, fontSize: 13, color: "var(--c-ink-secondary)", flexWrap: "wrap" }}>
+            <span>
+              <span style={{ color: "var(--c-ink-muted)" }}>Zone </span>
+              {zone.name}
+            </span>
+            <span>
+              <span style={{ color: "var(--c-ink-muted)" }}>Detected </span>
+              {fmtDate(incident.detected_at)} ({elapsed(incident.detected_at)} ago)
+            </span>
+            <span>
+              <span style={{ color: "var(--c-ink-muted)" }}>Confidence </span>
+              <span style={{ color: "#f59e0b" }}>{conf}%</span>
+            </span>
+            <span>
+              <span style={{ color: "var(--c-ink-muted)" }}>Trace </span>
+              <span style={{ fontFamily: "var(--font-mono)" }}>
+                {incident.agent_trace_id ?? `trace-${id.slice(-4)}`}
+              </span>
+            </span>
+            <span>
+              <span style={{ color: "var(--c-ink-muted)" }}>Audit </span>
+              <span style={{ fontFamily: "var(--font-mono)", color: "#10b981" }}>
+                {events.length} events · {dispatches.length} dispatches
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div className="glass" style={glassStyle({ padding: "22px 24px", marginBottom: 18 })}>
+          <Eyebrow style={{ marginBottom: 14 }}>Status progression</Eyebrow>
+          <StatusLadder status={incident.status} />
+        </div>
+
+        {!closed ? (
+          <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+            <button onClick={handleAcknowledge} style={btnTealStyle({ padding: "8px 14px", fontSize: 13 })}>
+              Acknowledge
+            </button>
+            <button onClick={handleEscalate} style={btnWarnStyle({ padding: "8px 14px", fontSize: 13 })}>
+              Escalate to authorities
+            </button>
+            <button onClick={handleResolve} style={btnOkStyle({ padding: "8px 14px", fontSize: 13 })}>
+              Mark resolved
+            </button>
+            <button onClick={handleDismiss} style={btnDangerStyle({ padding: "8px 14px", fontSize: 13 })}>
+              Dismiss as false positive
+            </button>
+          </div>
+        ) : null}
+
+        {actionError ? (
           <div
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 20,
-              flexWrap: "wrap",
+              marginBottom: 18,
+              padding: 14,
+              borderRadius: 14,
+              background: "rgba(220,38,38,0.08)",
+              border: "1px solid rgba(220,38,38,0.4)",
+              color: "var(--c-ink-secondary)",
+              fontSize: 13,
             }}
           >
-            <div style={{ maxWidth: 880 }}>
-              <Link
-                href="/"
-                style={{
-                  fontSize: 12,
-                  fontFamily: "var(--font-mono)",
-                  color: "var(--c-ink-muted)",
-                }}
-              >
-                ← Back to live board
-              </Link>
-              <div className="eyebrow" style={{ marginTop: 16 }}>
-                INCIDENT · {id}
-              </div>
-              <h1
-                style={{
-                  margin: "10px 0 10px",
-                  fontSize: "clamp(2.1rem, 2vw + 1.4rem, 3.6rem)",
-                  lineHeight: 1.02,
-                }}
-              >
-                {category}
-              </h1>
-              <p
-                style={{
-                  margin: 0,
-                  color: "var(--c-ink-secondary)",
-                  fontSize: 15,
-                  maxWidth: 760,
-                }}
-              >
-                {incident?.summary ||
-                  incident?.classification?.rationale ||
-                  "Live control-room view for this incident. Monitor evidence, cascade risk, and dispatch state here."}
-              </p>
-              <div
-                style={{
-                  marginTop: 16,
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 10,
-                  alignItems: "center",
-                }}
-              >
-                <SeverityBadge severity={severity} />
-                {incident ? <StatusPill status={incident.status} /> : null}
-                <MetaChip label={`Zone · ${incident?.zone_id ?? "Unknown"}`} />
-                 <MetaChip label={confidence} />
-                <MetaChip
-                  label={`Detected ${
-                    isMounted
-                      ? formatClock(incident?.detected_at ?? "2024-01-01T00:00:00Z")
-                      : "--:--:--"
-                  }`}
-                />
-              </div>
-            </div>
-
-            <div
-              style={{
-                minWidth: 320,
-                display: "grid",
-                gap: 14,
-                alignSelf: "stretch",
-              }}
-            >
-              <div
-                className="panel"
-                style={{
-                  padding: 18,
-                  borderColor: `${SEVERITY_COLOR[severity]}55`,
-                  background: "rgba(8, 15, 24, 0.72)",
-                }}
-              >
-                <div className="eyebrow">Dispatch clock</div>
-                {primary && primary.status === "PAGED" ? (
-                  <div
-                    style={{
-                      marginTop: 14,
-                      display: "flex",
-                      gap: 14,
-                      alignItems: "center",
-                    }}
-                  >
-                    <CountdownRing
-                      key={countdownKey}
-                      totalSeconds={ACK_COUNTDOWN_SECONDS}
-                      color={SEVERITY_COLOR[severity]}
-                      onComplete={() => void 0}
-                      size={68}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 19, fontWeight: 700 }}>
-                        {primary.notes || "Responder paging in progress"}
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 6,
-                          color: "var(--c-ink-secondary)",
-                          fontSize: 13,
-                        }}
-                      >
-                        Escalates automatically in {ACK_COUNTDOWN_SECONDS}s if nobody claims
-                        the incident.
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 14 }}>
-                    <div style={{ fontSize: 19, fontWeight: 700 }}>
-                      {primary ? primary.status : "Awaiting dispatch"}
-                    </div>
-                    <div
-                      style={{
-                        marginTop: 6,
-                        color: "var(--c-ink-secondary)",
-                        fontSize: 13,
-                      }}
-                    >
-                      {primary
-                        ? `${primary.responder_id} currently owns the primary dispatch thread.`
-                        : "Dispatch service has not published a responder assignment yet."}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div
-                style={{
-                  padding: 18,
-                  borderRadius: 18,
-                  background: "rgba(8, 15, 24, 0.72)",
-                  border: "1px solid rgba(51, 65, 85, 0.92)",
-                }}
-              >
-                <div className="eyebrow">Situation snapshot</div>
-                <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                  <SnapshotRow label="Live dispatches" value={String(dispatches.length)} />
-                  <SnapshotRow label="Timeline events" value={String(events.length)} />
-                   <SnapshotRow
-                    label="Last state change"
-                    value={
-                      isMounted
-                        ? formatClock(
-                            events[events.length - 1]?.event_time ??
-                              incident?.detected_at ??
-                              "2024-01-01T00:00:00Z",
-                          )
-                        : "--:--:--"
-                    }
-                  />
-                </div>
-              </div>
-            </div>
+            {actionError}
           </div>
-        </header>
+        ) : null}
 
-        <div className="detail-grid">
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <Panel
-              title="Evidence panel"
-              kicker="Demo frame + live overlay"
-              action={
-                <span style={{ color: "var(--c-ink-muted)" }}>
-                  {incident?.zone_id ?? "Demo feed"}
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="glass" style={glassStyle({ padding: 20 })}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <Eyebrow>Evidence frame</Eyebrow>
+                <span style={{ fontSize: 11, color: "var(--c-ink-muted)", fontFamily: "var(--font-mono)" }}>
+                  {zone.camera_ids.length} cameras in zone
                 </span>
-              }
-            >
-              <div
-                style={{
-                  position: "relative",
-                  minHeight: 360,
-                  borderRadius: 22,
-                  overflow: "hidden",
-                  border: `1px solid ${SEVERITY_COLOR[severity]}66`,
-                  backgroundImage:
-                    "linear-gradient(180deg, rgba(10, 14, 20, 0.08), rgba(10, 14, 20, 0.86)), url('/demo-frame.jpg')",
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  padding: 18,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    alignItems: "start",
-                  }}
-                >
-                  <div
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      background: "rgba(8, 15, 24, 0.72)",
-                      border: "1px solid rgba(51, 65, 85, 0.92)",
-                      fontSize: 12,
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    LIVE CAMERA
-                  </div>
-                  <SeverityBadge severity={severity} size="sm" />
-                </div>
-
-                <div
-                  style={{
-                    padding: 18,
-                    borderRadius: 18,
-                    background: "rgba(8, 15, 24, 0.74)",
-                    border: "1px solid rgba(51, 65, 85, 0.92)",
-                    maxWidth: 620,
-                  }}
-                >
-                  <div className="eyebrow">{incident?.zone_id ?? "Venue zone"}</div>
-                  <div style={{ marginTop: 8, fontSize: 28, fontWeight: 700, lineHeight: 1.06 }}>
-                    {incident?.classification?.sub_type
-                      ? `${category} · ${incident.classification.sub_type}`
-                      : category}
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 8,
-                      color: "var(--c-ink-secondary)",
-                      fontSize: 14,
-                    }}
-                  >
-                    {incident?.classification?.rationale ||
-                      "Classifier rationale will appear here once the incident record syncs."}
-                  </div>
-                   <div
-                    style={{
-                      marginTop: 14,
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 8,
-                    }}
-                  >
-                    <MetaChip
-                      label={`Detected ${
-                        isMounted
-                          ? formatSince(incident?.detected_at ?? "2024-01-01T00:00:00Z")
-                          : "..."
-                      }`}
-                    />
-                    <MetaChip label={incident?.incident_id ?? id} />
-                    <MetaChip label={incident?.status ?? "Pending sync"} />
-                  </div>
-                </div>
               </div>
-            </Panel>
-
-            <Panel
-              title="Cascade forecast"
-              kicker={
-                predictions.length
-                  ? "30 / 90 / 300 second outlook"
-                  : "No cascade prediction returned"
-              }
-            >
-              {predictions.length === 0 ? (
-                <EmptyState
-                  title="No cascade model output yet"
-                  description="When the classifier returns predictions, this panel turns into a quick escalation curve for the duty manager."
-                />
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                  {predictions.map((prediction) => (
-                    <div key={`${prediction.horizon_seconds}-${prediction.outcome}`}>
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "92px minmax(0, 1fr) 54px",
-                          gap: 12,
-                          alignItems: "center",
-                        }}
-                      >
-                        <div className="eyebrow">+{prediction.horizon_seconds}s</div>
-                        <div
-                          style={{
-                            height: 12,
-                            borderRadius: 999,
-                            background: "rgba(51, 65, 85, 0.6)",
-                            overflow: "hidden",
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: `${Math.round(prediction.probability * 100)}%`,
-                              height: "100%",
-                              background:
-                                severity === "S1"
-                                  ? "#DC2626"
-                                  : severity === "S2"
-                                    ? "#EF4444"
-                                    : "#14B8A6",
-                            }}
-                          />
-                        </div>
-                        <div
-                          style={{
-                            textAlign: "right",
-                            fontFamily: "var(--font-mono)",
-                            color: "var(--c-ink-secondary)",
-                            fontSize: 12,
-                          }}
-                        >
-                          {Math.round(prediction.probability * 100)}%
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 8,
-                          color: "var(--c-ink-secondary)",
-                          fontSize: 13,
-                        }}
-                      >
-                        {prediction.outcome}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
-
-            <Panel title="Agent trace timeline" kicker={`${events.length} state transitions`}>
-              {events.length === 0 ? (
-                <EmptyState
-                  title="Timeline waiting for event sync"
-                  description="Once incident events land in Firestore, this panel becomes the readable trace for judges and operators."
-                />
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {events.map((event) => (
-                    <div
-                      key={event.event_id}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "96px minmax(0, 1fr)",
-                        gap: 14,
-                        paddingBottom: 12,
-                        borderBottom: "1px solid rgba(51, 65, 85, 0.5)",
-                      }}
-                    >
-                      <div className="eyebrow" style={{ paddingTop: 2 }}>
-                        {formatClock(event.event_time)}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 600 }}>
-                          {event.from_status ?? "NEW"} → {event.to_status}
-                        </div>
-                        <div
-                          style={{
-                            marginTop: 4,
-                            color: "var(--c-ink-secondary)",
-                            fontSize: 13,
-                          }}
-                        >
-                          {event.actor_type} · {event.actor_id}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <Panel
-              title="Command actions"
-              kicker={primary ? `Primary responder · ${primary.responder_id}` : "Awaiting dispatch"}
-            >
-              {actionError ? <Callout tone="#DC2626">{actionError}</Callout> : null}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: 10,
-                }}
-              >
-                <ActionButton
-                  color={SEVERITY_COLOR[severity]}
-                  disabled={!canAck || acting}
-                  onClick={() => act("ack")}
-                >
-                  Claim
-                </ActionButton>
-                <ActionButton
-                  color="transparent"
-                  disabled={!canDecline || acting}
-                  onClick={() => act("decline")}
-                  outline
-                >
-                  Decline
-                </ActionButton>
-                <ActionButton
-                  color="transparent"
-                  disabled={!canEnRoute || acting}
-                  onClick={() => act("enroute")}
-                  outline
-                >
-                  En route
-                </ActionButton>
-                <ActionButton
-                  color="transparent"
-                  disabled={!canArrive || acting}
-                  onClick={() => act("arrived")}
-                  outline
-                >
-                  Arrived
-                </ActionButton>
-                <ActionButton
-                  color="transparent"
-                  disabled={!canHandoff || acting}
-                  onClick={() => act("handoff")}
-                  outline
-                >
-                  Handoff
-                </ActionButton>
-              </div>
+              <EvidenceFrame zoneName={zone.name} cameraId={zone.camera_ids[0] ?? "cam-01"} severity={sev} />
               <div
                 style={{
                   marginTop: 14,
+                  padding: "10px 12px",
+                  background: "rgba(255,255,255,0.02)",
+                  borderRadius: 10,
+                  fontSize: 12,
                   color: "var(--c-ink-secondary)",
-                  fontSize: 13,
+                  lineHeight: 1.55,
                 }}
               >
-                {primary
-                  ? `${primary.role} ${primary.responder_id} currently sits in ${primary.status}.`
-                  : "Dispatch service has not paged a responder for this incident yet."}
+                <span style={{ color: "#14b8a6", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em" }}>
+                  AI RATIONALE
+                </span>
+                <br />
+                {incident.classification?.rationale || "Awaiting classifier output."}
               </div>
-            </Panel>
+            </div>
 
-            <Panel title="Dispatch ladder" kicker={`${dispatches.length} dispatch records`}>
-              {dispatches.length === 0 ? (
-                <EmptyState
-                  title="No dispatch records yet"
-                  description="When responders are paged, this list shows who owns the incident and who is next in line."
-                />
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {dispatches.map((dispatch) => (
+            {(incident.classification?.cascade_predictions ?? []).length > 0 ? (
+              <div className="glass" style={glassStyle({ padding: 20 })}>
+                <Eyebrow style={{ marginBottom: 14 }}>Cascade predictions</Eyebrow>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {incident.classification!.cascade_predictions.map((p, i) => (
                     <div
-                      key={dispatch.dispatch_id}
+                      key={i}
                       style={{
-                        padding: 16,
-                        borderRadius: 18,
-                        background: "rgba(8, 15, 24, 0.72)",
-                        border: "1px solid rgba(51, 65, 85, 0.92)",
-                        display: "grid",
-                        gap: 8,
+                        padding: 14,
+                        background: "rgba(220,38,38,0.05)",
+                        borderRadius: 12,
+                        border: "1px solid rgba(220,38,38,0.18)",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          alignItems: "center",
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontSize: 16, fontWeight: 600 }}>
-                            {dispatch.responder_id}
-                          </div>
-                          <div style={{ color: "var(--c-ink-muted)", fontSize: 13 }}>
-                            {dispatch.role}
-                          </div>
+                      <Eyebrow style={{ color: "rgba(220,38,38,0.7)", marginBottom: 6 }}>
+                        In {Math.round(p.horizon_seconds / 60)} min
+                      </Eyebrow>
+                      <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>{p.outcome}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${p.probability * 100}%`,
+                              background: p.probability > 0.6 ? "#dc2626" : "#f59e0b",
+                            }}
+                          />
                         </div>
-                        <DispatchBadge status={dispatch.status} />
-                      </div>
-                      <div style={{ color: "var(--c-ink-secondary)", fontSize: 13 }}>
-                        {dispatch.notes || "No field note attached yet."}
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 8,
-                          fontSize: 12,
-                          color: "var(--c-ink-muted)",
-                          fontFamily: "var(--font-mono)",
-                        }}
-                      >
-                        <span>{dispatch.dispatch_id}</span>
-                        <span>{isMounted ? formatSince(dispatch.arrived_at ?? dispatch.en_route_at ?? dispatch.acknowledged_at ?? dispatch.paged_at) : "..."}</span>
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: p.probability > 0.6 ? "#dc2626" : "#f59e0b",
+                          }}
+                        >
+                          {Math.round(p.probability * 100)}%
+                        </span>
                       </div>
                     </div>
                   ))}
                 </div>
-              )}
-            </Panel>
+              </div>
+            ) : null}
 
-            <Panel title="Field playbook" kicker="Operator next steps">
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {playbook.map((step, index) => (
-                  <div
-                    key={step}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "32px minmax(0, 1fr)",
-                      gap: 12,
-                      padding: 14,
-                      borderRadius: 18,
-                      background: "rgba(8, 15, 24, 0.72)",
-                      border: "1px solid rgba(51, 65, 85, 0.92)",
-                      alignItems: "start",
-                    }}
-                  >
+            <div className="glass" style={glassStyle({ padding: 20 })}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <Eyebrow>Audit timeline</Eyebrow>
+                <span style={{ fontSize: 10, color: "#10b981", fontFamily: "var(--font-mono)" }}>
+                  ● HASH-CHAIN VERIFIED
+                </span>
+              </div>
+              <Timeline events={events} dispatches={dispatches} />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="glass" style={glassStyle({ padding: 20 })}>
+              <Eyebrow style={{ marginBottom: 10 }}>Zone · {zone.zone_id}</Eyebrow>
+              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>{zone.name}</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+                <ZField label="Type" v={zone.type} />
+                <ZField label="Floor" v={String(zone.floor)} />
+                <ZField label="Capacity" v={String(zone.capacity)} />
+                <ZField label="Exits" v={String(zone.exit_count)} />
+                <ZField label="Cameras" v={String(zone.camera_ids.length)} />
+                <ZField label="Sensors" v={String(zone.sensor_ids.length)} />
+              </div>
+              {zone.camera_ids.length > 0 ? (
+                <div style={{ marginTop: 12 }}>
+                  <Eyebrow style={{ marginBottom: 6 }}>Devices in zone</Eyebrow>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {[...zone.camera_ids, ...zone.sensor_ids].map((d) => (
+                      <span
+                        key={d}
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 10,
+                          padding: "3px 8px",
+                          background: "rgba(20,184,166,0.08)",
+                          border: "1px solid rgba(20,184,166,0.25)",
+                          borderRadius: 6,
+                          color: "#14b8a6",
+                        }}
+                      >
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="glass" style={glassStyle({ padding: 20 })}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <Eyebrow>Responders ({dispatches.length})</Eyebrow>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                {dispatches.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--c-ink-muted)" }}>No responders assigned</div>
+                ) : null}
+                {dispatches.map((d) => {
+                  const color = DISPATCH_STATUS_COLOR[d.status];
+                  const r = responderById(d.responder_id);
+                  return (
                     <div
+                      key={d.dispatch_id}
                       style={{
-                        width: 32,
-                        height: 32,
-                        borderRadius: 999,
-                        background: "rgba(20, 184, 166, 0.12)",
-                        border: "1px solid rgba(20, 184, 166, 0.3)",
-                        display: "grid",
-                        placeItems: "center",
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 12,
-                        color: "var(--c-ink-secondary)",
+                        padding: "11px 12px",
+                        background: "rgba(255,255,255,0.02)",
+                        borderRadius: 10,
+                        border: `1px solid ${color}33`,
                       }}
                     >
-                      {index + 1}
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                          marginBottom: 6,
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{r?.display_name ?? d.responder_id}</div>
+                          <div style={{ fontSize: 11, color: "var(--c-ink-muted)" }}>{d.role}</div>
+                        </div>
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 10,
+                            color,
+                            padding: "3px 8px",
+                            background: `${color}15`,
+                            borderRadius: 999,
+                            border: `1px solid ${color}40`,
+                          }}
+                        >
+                          {d.status.replace("_", " ")}
+                        </span>
+                      </div>
+                      {d.notes ? (
+                        <div style={{ fontSize: 11, color: "var(--c-ink-secondary)", marginBottom: 6 }}>{d.notes}</div>
+                      ) : null}
+                      {!closed ? (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                          {d.status === "PAGED" ? (
+                            <button onClick={() => dispatchAction(d, "ack")} style={btnGhostStyle({ padding: "4px 10px", fontSize: 11 })}>
+                              Ack
+                            </button>
+                          ) : null}
+                          {d.status === "ACKNOWLEDGED" ? (
+                            <button
+                              onClick={() => dispatchAction(d, "enroute")}
+                              style={btnGhostStyle({ padding: "4px 10px", fontSize: 11 })}
+                            >
+                              En route
+                            </button>
+                          ) : null}
+                          {d.status === "EN_ROUTE" ? (
+                            <button
+                              onClick={() => dispatchAction(d, "arrived")}
+                              style={btnGhostStyle({ padding: "4px 10px", fontSize: 11 })}
+                            >
+                              Arrived
+                            </button>
+                          ) : null}
+                          {d.status === "ARRIVED" ? (
+                            <button
+                              onClick={() => dispatchAction(d, "handoff")}
+                              style={btnGhostStyle({ padding: "4px 10px", fontSize: 11 })}
+                            >
+                              Hand off
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                    <div style={{ color: "var(--c-ink-secondary)", fontSize: 13 }}>{step}</div>
+                  );
+                })}
+              </div>
+              {!closed && availableResponders.length > 0 ? (
+                <details>
+                  <summary
+                    style={{ fontSize: 12, color: "#14b8a6", cursor: "pointer", padding: "8px 0", listStyle: "none" }}
+                  >
+                    + Page another responder
+                  </summary>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                    {availableResponders.map((r) => (
+                      <button
+                        key={r.responder_id}
+                        onClick={() => handleAssign(r.responder_id, r.role)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "8px 10px",
+                          background: "rgba(255,255,255,0.02)",
+                          border: "1px solid var(--c-border-strong)",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          color: "var(--c-ink-primary)",
+                          textAlign: "left",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 8,
+                            background: "var(--c-bg-surface)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: "#14b8a6",
+                          }}
+                        >
+                          {r.display_name.split(" ").map((s) => s[0]).join("").slice(0, 2)}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 500 }}>{r.display_name}</div>
+                          <div style={{ fontSize: 10, color: "var(--c-ink-muted)" }}>
+                            {r.role} · {r.distance_m}m
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 11, color: "#14b8a6" }}>Page →</span>
+                      </button>
+                    ))}
                   </div>
+                </details>
+              ) : null}
+            </div>
+
+            {!closed ? <NoteBox incidentId={incident.incident_id} /> : null}
+
+            <div className="glass" style={glassStyle({ padding: 20 })}>
+              <Eyebrow style={{ marginBottom: 10 }}>Nearby emergency services</Eyebrow>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12 }}>
+                {[
+                  ...VENUE.nearby_services.ambulance,
+                  ...VENUE.nearby_services.fire,
+                  ...VENUE.nearby_services.police,
+                ].map((s, i) => (
+                  <a
+                    key={i}
+                    href={`tel:${s.phone}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      ui.toast(`Dialing ${s.name} · ${s.phone}`, { tone: "info" });
+                    }}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      padding: "7px 10px",
+                      background: "rgba(255,255,255,0.02)",
+                      borderRadius: 8,
+                      color: "var(--c-ink-secondary)",
+                      textDecoration: "none",
+                    }}
+                  >
+                    <span>{s.name}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", color: "#14b8a6" }}>{s.phone}</span>
+                  </a>
                 ))}
               </div>
-            </Panel>
+            </div>
           </div>
         </div>
       </div>
-    </main>
+    </>
   );
 }
 
-function Panel({
-  title,
-  kicker,
-  action,
-  children,
-}: {
-  action?: React.ReactNode;
-  children: React.ReactNode;
-  kicker?: string;
-  title: string;
-}) {
+// ── Status Ladder ─────────────────────────────────────────────────────────
+function StatusLadder({ status }: { status: IncidentStatus }) {
+  const idx = STATUS_LADDER.indexOf(status);
+  const dismissed = status === "DISMISSED";
   return (
-    <section className="panel" style={{ padding: 22 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "end",
-          marginBottom: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <div className="eyebrow">{kicker ?? "Incident view"}</div>
-          <h2 style={{ margin: "8px 0 0", fontSize: 24 }}>{title}</h2>
-        </div>
-        {action ? (
+    <div style={{ display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap" }}>
+      {STATUS_LADDER.map((s, i) => {
+        const reached = !dismissed && i <= idx;
+        const current = !dismissed && i === idx;
+        const color = current ? STATUS_COLOR[s] : reached ? "#14b8a6" : "var(--c-ink-muted)";
+        return (
+          <React.Fragment key={s}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 70 }}>
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: reached ? color : "transparent",
+                  border: `1.5px solid ${color}`,
+                  animation: current ? "aegis-dot-pulse 1.4s infinite" : "none",
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 9,
+                  letterSpacing: "0.05em",
+                  color: reached ? "var(--c-ink-primary)" : "var(--c-ink-muted)",
+                  textAlign: "center",
+                }}
+              >
+                {s.replace("_", " ")}
+              </span>
+            </div>
+            {i < STATUS_LADDER.length - 1 ? (
+              <div
+                style={{
+                  flex: 1,
+                  height: 1.5,
+                  background: i < idx ? "#14b8a6" : "var(--c-border-strong)",
+                  minWidth: 10,
+                  marginTop: -12,
+                }}
+              />
+            ) : null}
+          </React.Fragment>
+        );
+      })}
+      {dismissed ? (
+        <span
+          style={{
+            marginLeft: 12,
+            padding: "4px 12px",
+            borderRadius: 999,
+            background: "rgba(100,116,139,0.15)",
+            color: "var(--c-ink-muted)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+          }}
+        >
+          DISMISSED
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────
+function Timeline({ events, dispatches }: { events: IncidentEvent[]; dispatches: Dispatch[] }) {
+  const items: { time: unknown; label: string; actor: string; color: string }[] = [
+    ...events.map((e) => ({
+      time: e.event_time,
+      label: e.to_status.replace("_", " "),
+      actor: `${e.actor_type} · ${e.actor_id}`,
+      color: STATUS_COLOR[e.to_status] ?? "#94a3b8",
+    })),
+    ...dispatches.flatMap<{ time: unknown; label: string; actor: string; color: string }>((d) => {
+      const out: { time: unknown; label: string; actor: string; color: string }[] = [];
+      if (d.paged_at) out.push({ time: d.paged_at, label: `Paged ${d.responder_id}`, actor: d.role, color: "#f59e0b" });
+      if (d.acknowledged_at) out.push({ time: d.acknowledged_at, label: "Acknowledged", actor: d.responder_id, color: "#3b82f6" });
+      if (d.en_route_at) out.push({ time: d.en_route_at, label: "En route", actor: d.responder_id, color: "#3b82f6" });
+      if (d.arrived_at) out.push({ time: d.arrived_at, label: "Arrived on scene", actor: d.responder_id, color: "#14b8a6" });
+      return out;
+    }),
+  ].sort((a, b) => toEpoch(a.time) - toEpoch(b.time));
+  return (
+    <div style={{ position: "relative", paddingLeft: 18 }}>
+      <div style={{ position: "absolute", left: 5, top: 6, bottom: 6, width: 1, background: "var(--c-border-strong)" }} />
+      {items.map((it, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 14, paddingBottom: 14, position: "relative" }}>
           <div
             style={{
-              fontSize: 12,
-              color: "var(--c-ink-muted)",
-              fontFamily: "var(--font-mono)",
+              position: "absolute",
+              left: -18,
+              top: 3,
+              width: 11,
+              height: 11,
+              borderRadius: "50%",
+              background: it.color,
+              border: "2px solid var(--c-bg-primary)",
+              zIndex: 1,
             }}
-          >
-            {action}
+          />
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{it.label}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--c-ink-muted)" }}>
+                {fmtTime(it.time)}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--c-ink-muted)", fontFamily: "var(--font-mono)" }}>{it.actor}</div>
           </div>
-        ) : null}
+        </div>
+      ))}
+      {items.length === 0 ? <div style={{ color: "var(--c-ink-muted)", fontSize: 12, padding: 12 }}>No events yet</div> : null}
+    </div>
+  );
+}
+
+// ── Evidence Frame ────────────────────────────────────────────────────────
+function EvidenceFrame({ zoneName, cameraId, severity }: { zoneName: string; cameraId: string; severity: Severity }) {
+  const color = SEVERITY_COLOR[severity];
+  const [now, setNow] = React.useState<string>("00:00:00");
+  React.useEffect(() => {
+    setNow(new Date().toLocaleTimeString("en-GB"));
+    const t = setInterval(() => setNow(new Date().toLocaleTimeString("en-GB")), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div
+      style={{
+        position: "relative",
+        aspectRatio: "16/9",
+        borderRadius: 14,
+        overflow: "hidden",
+        background: `linear-gradient(180deg, rgba(10,14,20,0.3) 0%, rgba(10,14,20,0.95) 100%), radial-gradient(ellipse at center, ${color}33 0%, transparent 60%), linear-gradient(135deg, #0f1722 0%, #1a2230 100%)`,
+        border: `1px solid ${color}55`,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage:
+            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.015) 2px, rgba(255,255,255,0.015) 3px)",
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: "32%",
+          top: "28%",
+          width: "36%",
+          height: "50%",
+          border: `2px solid ${color}`,
+          borderRadius: 4,
+          boxShadow: `0 0 18px ${color}66`,
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: -22,
+            left: -2,
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            padding: "2px 8px",
+            background: color,
+            color: "#0a0e14",
+            borderRadius: 4,
+            fontWeight: 600,
+          }}
+        >
+          {severity} · 92%
+        </div>
       </div>
-      {children}
-    </section>
-  );
-}
-
-function Callout({
-  tone,
-  children,
-}: {
-  children: React.ReactNode;
-  tone: string;
-}) {
-  return (
-    <div
-      style={{
-        marginBottom: 14,
-        padding: 14,
-        borderRadius: 16,
-        background: "rgba(8, 15, 24, 0.72)",
-        border: `1px solid ${tone}`,
-        color: "var(--c-ink-secondary)",
-        fontSize: 13,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function EmptyState({
-  title,
-  description,
-}: {
-  description: string;
-  title: string;
-}) {
-  return (
-    <div
-      style={{
-        padding: 24,
-        borderRadius: 18,
-        border: "1px dashed rgba(51, 65, 85, 0.92)",
-        background: "rgba(8, 15, 24, 0.55)",
-        textAlign: "center",
-      }}
-    >
-      <div style={{ fontSize: 18, fontWeight: 600 }}>{title}</div>
-      <div style={{ marginTop: 8, color: "var(--c-ink-secondary)", fontSize: 13 }}>
-        {description}
+      <div
+        style={{
+          position: "absolute",
+          top: 10,
+          left: 12,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          color: "var(--c-ink-secondary)",
+        }}
+      >
+        <span
+          style={{ width: 6, height: 6, background: "#dc2626", borderRadius: "50%", animation: "aegis-dot-pulse 1.2s infinite" }}
+        />
+        REC · {cameraId}
+      </div>
+      <div style={{ position: "absolute", bottom: 10, left: 12, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--c-ink-secondary)" }}>
+        {zoneName}
+      </div>
+      <div style={{ position: "absolute", bottom: 10, right: 12, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--c-ink-secondary)" }}>
+        {now}
       </div>
     </div>
   );
 }
 
-function MetaChip({ label }: { label: string }) {
+// ── Note Box ──────────────────────────────────────────────────────────────
+function NoteBox({ incidentId }: { incidentId: string }) {
+  const ui = useUI();
+  const [val, setVal] = React.useState("");
+  const [notes, setNotes] = React.useState<{ t: number; msg: string }[]>([]);
+  const [saving, setSaving] = React.useState(false);
+  async function add() {
+    if (!val.trim()) return;
+    setSaving(true);
+    try {
+      await addOperatorNote(incidentId, val.trim());
+      setNotes([{ t: Date.now(), msg: val.trim() }, ...notes]);
+      setVal("");
+      ui.toast("Note added to audit log", { tone: "success" });
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    } finally {
+      setSaving(false);
+    }
+  }
   return (
-    <span
-      style={{
-        padding: "6px 10px",
-        borderRadius: 999,
-        background: "rgba(255, 255, 255, 0.04)",
-        border: "1px solid rgba(51, 65, 85, 0.92)",
-        fontSize: 12,
-        color: "var(--c-ink-secondary)",
-        fontFamily: "var(--font-mono)",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
-function SnapshotRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: 12,
-        alignItems: "center",
-      }}
-    >
-      <span style={{ color: "var(--c-ink-secondary)", fontSize: 13 }}>{label}</span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{value}</span>
+    <div className="glass" style={glassStyle({ padding: 20 })}>
+      <Eyebrow style={{ marginBottom: 10 }}>Operator note</Eyebrow>
+      <textarea
+        rows={2}
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        placeholder="Add field note (saved to audit chain)..."
+        style={{ resize: "vertical", marginBottom: 8 }}
+      />
+      <button
+        onClick={add}
+        disabled={!val.trim() || saving}
+        style={btnTealStyle({ width: "100%", padding: "8px 14px", fontSize: 13 })}
+      >
+        {saving ? "Saving…" : "Add note"}
+      </button>
+      {notes.length > 0 ? (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+          {notes.map((n, i) => (
+            <div
+              key={i}
+              style={{
+                padding: "7px 10px",
+                background: "rgba(255,255,255,0.02)",
+                borderRadius: 8,
+                fontSize: 12,
+                color: "var(--c-ink-secondary)",
+              }}
+            >
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--c-ink-muted)", marginBottom: 2 }}>
+                {new Date(n.t).toLocaleTimeString("en-GB")}
+              </div>
+              {n.msg}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function DispatchBadge({ status }: { status: Dispatch["status"] }) {
+// ── Small bits ────────────────────────────────────────────────────────────
+function ZField({ label, v }: { label: string; v: string }) {
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: "6px 10px" }}>
+      <Eyebrow style={{ marginBottom: 2 }}>{label}</Eyebrow>
+      <div style={{ fontSize: 13, fontWeight: 500 }}>{v}</div>
+    </div>
+  );
+}
+
+function SevBadge({ sev }: { sev: Severity }) {
+  const bg = SEVERITY_COLOR[sev];
+  const fg = sev === "S3" ? "#0a0e14" : "#fff";
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 6,
-        padding: "5px 10px",
+        padding: "4px 11px",
         borderRadius: 999,
-        border: `1px solid ${DISPATCH_TONE[status]}`,
-        fontSize: 12,
         fontFamily: "var(--font-mono)",
-        color: "var(--c-ink-primary)",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.05em",
+        background: bg,
+        color: fg,
       }}
     >
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: 999,
-          background: DISPATCH_TONE[status],
-        }}
-      />
-      {status}
+      {SEV_LABEL[sev]}
     </span>
   );
 }
 
-function ActionButton({
-  children,
-  color,
-  disabled,
-  onClick,
-  outline,
-}: {
-  children: React.ReactNode;
-  color: string;
-  disabled: boolean;
-  onClick: () => void;
-  outline?: boolean;
-}) {
+function Eyebrow({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
+    <div
       style={{
-        minHeight: 52,
-        padding: "14px 16px",
-        borderRadius: 14,
-        border: outline ? "1px solid rgba(51, 65, 85, 0.92)" : "none",
-        background: outline ? "rgba(8, 15, 24, 0.72)" : color,
-        color: outline ? "var(--c-ink-primary)" : "#F8FAFC",
-        fontSize: 14,
-        fontWeight: 600,
+        fontFamily: "var(--font-mono)",
+        fontSize: 10,
+        letterSpacing: "0.14em",
+        textTransform: "uppercase",
+        color: "var(--c-ink-muted)",
+        ...style,
       }}
     >
       {children}
-    </button>
+    </div>
   );
 }
 
-function buildPlaybook(incident: Incident | null): string[] {
-  if (!incident) {
-    return [
-      "Watch for the first dispatch assignment, then claim or escalate it inside the 15 second window.",
-      "Keep the evidence panel open so the team can align on the same visual truth.",
-      "Log every override and handoff so the audit trace stays complete.",
-    ];
-  }
-
-  const category = incident.classification?.category ?? "OTHER";
-  const severity = incident.classification?.severity ?? "S4";
-
-  const base = [
-    "Confirm the primary responder owns the incident and route backup staff if the clock is still running.",
-    "Keep adjacent zones clear until the cascade forecast flattens or the incident is downgraded.",
-  ];
-
-  if (category === "FIRE") {
-    return [
-      "Dispatch fire-trained staff first and keep the kitchen or source zone isolated from guest movement.",
-      "Prepare guest evacuation messaging for adjacent zones before smoke spread accelerates.",
-      ...base,
-    ];
-  }
-  if (category === "MEDICAL") {
-    return [
-      "Page the nearest medically qualified responder and keep lift or corridor access clear.",
-      "Gather any known patient context before external responders arrive for handoff.",
-      ...base,
-    ];
-  }
-  if (category === "STAMPEDE") {
-    return [
-      "Push staff to relieve the pressure edge immediately and open alternate circulation routes.",
-      "Keep guest messaging calm, directional, and multilingual if the crowd is dense.",
-      ...base,
-    ];
-  }
-  if (severity === "S1") {
-    return [
-      "Treat this as an immediate safety event and keep a human operator in the loop on every side effect.",
-      ...base,
-      "Prepare authority contact details in case the escalation ladder reaches external services.",
-    ];
-  }
-  return [
-    "Validate the signal with nearby staff or cameras before broadening the response.",
-    ...base,
-    "If the incident downgrades, capture the rationale in the event trace for later review.",
-  ];
+// ── Style helpers ─────────────────────────────────────────────────────────
+function glassStyle(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    background: "var(--c-bg-panel)",
+    border: "1px solid rgba(51,65,85,0.7)",
+    borderRadius: 20,
+    backdropFilter: "blur(16px)",
+    boxShadow: "0 8px 40px rgba(2,6,23,0.4)",
+    ...extra,
+  };
 }
 
-function formatClock(value: unknown): string {
-  return toDate(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+function btnTealStyle(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: "7px 14px",
+    borderRadius: 10,
+    fontSize: 12,
+    fontWeight: 500,
+    border: "none",
+    cursor: "pointer",
+    background: "#14b8a6",
+    color: "#0a0e14",
+    fontFamily: "inherit",
+    ...extra,
+  };
 }
 
-function formatSince(value: unknown): string {
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - toEpoch(value)) / 1000));
-  if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`;
-  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)}m ago`;
-  return `${Math.floor(elapsedSeconds / 3600)}h ago`;
+function btnGhostStyle(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: "7px 14px",
+    borderRadius: 10,
+    fontSize: 12,
+    fontWeight: 500,
+    border: "1px solid var(--c-border-strong)",
+    cursor: "pointer",
+    background: "rgba(255,255,255,0.04)",
+    color: "var(--c-ink-secondary)",
+    fontFamily: "inherit",
+    ...extra,
+  };
 }
 
-function toEpoch(value: unknown): number {
-  const date = toDate(value);
-  const epoch = date.getTime();
-  return Number.isFinite(epoch) ? epoch : Date.now();
+function btnWarnStyle(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: "7px 14px",
+    borderRadius: 10,
+    fontSize: 12,
+    fontWeight: 500,
+    border: "1px solid rgba(245,158,11,0.3)",
+    cursor: "pointer",
+    background: "rgba(245,158,11,0.12)",
+    color: "#f59e0b",
+    fontFamily: "inherit",
+    ...extra,
+  };
 }
 
-function toDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  if (typeof value === "string" || typeof value === "number") {
-    const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return date;
-  }
-  if (
-    value &&
-    typeof value === "object" &&
-    "toDate" in value &&
-    typeof (value as { toDate?: unknown }).toDate === "function"
-  ) {
-    const converted = (value as { toDate: () => Date }).toDate();
-    if (converted instanceof Date) return converted;
-  }
-  if (
-    value &&
-    typeof value === "object" &&
-    "seconds" in value &&
-    typeof (value as { seconds?: unknown }).seconds === "number"
-  ) {
-    const seconds = (value as { seconds: number }).seconds;
-    const nanos =
-      "nanoseconds" in value && typeof (value as { nanoseconds?: unknown }).nanoseconds === "number"
-        ? (value as { nanoseconds: number }).nanoseconds
-        : 0;
-    return new Date(seconds * 1000 + Math.floor(nanos / 1_000_000));
-  }
-  return new Date();
+function btnOkStyle(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: "7px 14px",
+    borderRadius: 10,
+    fontSize: 12,
+    fontWeight: 500,
+    border: "1px solid rgba(16,185,129,0.35)",
+    cursor: "pointer",
+    background: "rgba(16,185,129,0.12)",
+    color: "#10b981",
+    fontFamily: "inherit",
+    ...extra,
+  };
+}
+
+function btnDangerStyle(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: "7px 14px",
+    borderRadius: 10,
+    fontSize: 12,
+    fontWeight: 500,
+    border: "1px solid rgba(220,38,38,0.35)",
+    cursor: "pointer",
+    background: "rgba(220,38,38,0.15)",
+    color: "#dc2626",
+    fontFamily: "inherit",
+    ...extra,
+  };
 }

@@ -2,6 +2,7 @@
   --c-bg-primary: #0a0e14;
   --c-bg-elevated: #121821;
   --c-bg-surface: #1a2230;
+  --c-bg-panel: rgba(18, 24, 33, 0.84);
   --c-ink-primary: #f1f5f9;
   --c-ink-secondary: #94a3b8;
   --c-ink-muted: #64748b;
@@ -12,13 +13,17 @@
   --c-status-action: #14b8a6;
   --c-border: #1e293b;
   --c-border-strong: #334155;
-  font-family:
-    Inter,
+  --font-body:
+    "IBM Plex Sans",
+    ui-sans-serif,
     system-ui,
-    -apple-system,
-    Segoe UI,
-    Roboto,
     sans-serif;
+  --font-mono:
+    "IBM Plex Mono",
+    ui-monospace,
+    SFMono-Regular,
+    monospace;
+  font-family: var(--font-body);
 }
 
 * {
@@ -29,7 +34,10 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--c-bg-primary);
+  background:
+    radial-gradient(circle at top left, rgba(20, 184, 166, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(220, 38, 38, 0.12), transparent 30%),
+    linear-gradient(180deg, #071018 0%, #0a0e14 40%, #06090f 100%);
   color: var(--c-ink-primary);
   min-height: 100vh;
   font-size: 16px;
@@ -38,15 +46,47 @@ body {
   overscroll-behavior-y: none;
 }
 
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 96px 96px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.8), transparent 85%);
+}
+
 button {
   font-family: inherit;
   color: inherit;
   cursor: pointer;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
+  transform: none;
 }
 
 a {
   color: var(--c-status-action);
   text-decoration: none;
+  transition: opacity 140ms ease;
+}
+
+a:hover {
+  opacity: 0.88;
 }
 
 input,
@@ -64,13 +104,18 @@ select {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--c-border-strong);
 }
 
 /* Mobile-safe-area support */
 body {
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+::selection {
+  background: rgba(20, 184, 166, 0.28);
 }
 
 @keyframes pulse-urgent {
@@ -85,4 +130,48 @@ body {
 
 .pulse-urgent {
   animation: pulse-urgent 1.4s infinite;
+}
+
+.panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 42%),
+    var(--c-bg-panel);
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  border-radius: 24px;
+  box-shadow:
+    0 24px 80px rgba(2, 6, 23, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(18px);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--c-ink-muted);
+}
+
+.divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(51, 65, 85, 0.85), transparent);
+}
+
+.app-bg {
+  background:
+    radial-gradient(ellipse at top, rgba(20, 184, 166, 0.08) 0%, transparent 50%),
+    var(--c-bg-primary);
+}
+
+.app-bg-critical {
+  background:
+    radial-gradient(ellipse at top, rgba(220, 38, 38, 0.18) 0%, transparent 60%),
+    var(--c-bg-primary);
+}
+
+.scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }

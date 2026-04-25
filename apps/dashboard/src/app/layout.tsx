@@ -2,6 +2,7 @@ import * as React from "react";
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { UIProvider } from "@/lib/ui";
 
 const bodyFont = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -38,7 +39,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${bodyFont.variable} ${monoFont.variable}`}>
-      <body>{children}</body>
+      <body>
+        <UIProvider>{children}</UIProvider>
+      </body>
     </html>
   );
 }

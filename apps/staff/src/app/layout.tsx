@@ -1,6 +1,20 @@
 import * as React from "react";
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { UIProvider } from "@/lib/ui";
+
+const bodyFont = IBM_Plex_Sans({
+  subsets: ["latin"],
+  variable: "--font-body",
+  weight: ["400", "500", "600", "700"],
+});
+
+const monoFont = IBM_Plex_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  weight: ["400", "500", "600"],
+});
 
 export const metadata: Metadata = {
   title: "Aegis Staff",
@@ -24,8 +38,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" className={`${bodyFont.variable} ${monoFont.variable}`}>
+      <body>
+        <UIProvider>{children}</UIProvider>
+      </body>
     </html>
   );
 }

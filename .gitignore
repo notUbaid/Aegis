@@ -44,6 +44,10 @@ htmlcov/
 .ruff_cache/
 .uv/
 
+# Node.js app-specific lib directories (source code) are tracked:
+!apps/*/src/lib/
+!apps/*/src/lib/**
+
 # ===== Node / pnpm =====
 node_modules/
 .pnpm-store/
@@ -51,10 +55,8 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.next/
-out/
-.turbo/
 .nx/
+.next/
 
 # ===== Flutter / Dart =====
 .dart_tool/
@@ -86,11 +88,15 @@ android/app/release/
 .DS_Store
 Thumbs.db
 
+# Claude Code CLI local settings
+.claude/
+
 # ===== Logs & temp =====
 *.log
 logs/
 *.tmp
 .cache/
+.audit/
 
 # ===== Firebase =====
 .firebase/
@@ -114,6 +120,7 @@ crash.log
 coverage/
 .turbo
 generated/
+*.tsbuildinfo
 
 # Keep the .secrets README but nothing else
 !.secrets/

@@ -96,9 +96,7 @@ async def update_incident_status(incident_id: str, to_status: Any) -> None:
         try:
             status_value = IncidentStatus(str(to_status)).value
         except ValueError as exc:
-            raise ValueError(
-                f"invalid incident status: {to_status!r}"
-            ) from exc
+            raise ValueError(f"invalid incident status: {to_status!r}") from exc
 
     client = _client_or_none()
     if client is None:
@@ -133,9 +131,7 @@ async def upsert_dispatch(dispatch: Any) -> None:
         incident_id = data.get("incident_id")
         dispatch_id = data.get("dispatch_id")
         if not incident_id or not dispatch_id:
-            raise ValueError(
-                "upsert_dispatch requires both incident_id and dispatch_id"
-            )
+            raise ValueError("upsert_dispatch requires both incident_id and dispatch_id")
         await (
             client.collection("incidents")
             .document(incident_id)

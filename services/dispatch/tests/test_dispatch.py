@@ -38,9 +38,7 @@ def _patch_side_effects(app_module):
         patch.object(app_module, "upsert_dispatch", new=AsyncMock()),
         patch.object(app_module, "write_audit", new=AsyncMock()),
         patch.object(app_module, "update_incident_status", new=AsyncMock()),
-        patch.object(
-            app_module, "get_dispatch_by_id", new=AsyncMock(return_value=None)
-        ),
+        patch.object(app_module, "get_dispatch_by_id", new=AsyncMock(return_value=None)),
         patch.object(app_module, "send_to_tokens", return_value=[]),
     ):
         yield

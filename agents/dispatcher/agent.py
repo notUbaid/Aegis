@@ -160,9 +160,7 @@ class DispatcherAgent:
         )
 
         # 3. Final selection
-        dispatched, backup = self._select_responders(
-            inp.classification.severity, pool, ordered_ids
-        )
+        dispatched, backup = self._select_responders(inp.classification.severity, pool, ordered_ids)
 
         rationale = rerank_rationale or (
             f"Ranked {len(pool)} eligible responders; dispatched "
@@ -190,9 +188,7 @@ class DispatcherAgent:
                 continue
             if required and _skill_score(r, required) == 0:
                 continue
-            score = _composite_score(
-                r, required, inp.language_preferences, inp.max_eta_seconds
-            )
+            score = _composite_score(r, required, inp.language_preferences, inp.max_eta_seconds)
             pool.append((r, score, eta))
 
         pool.sort(key=lambda x: x[1], reverse=True)
@@ -298,4 +294,3 @@ class DispatcherAgent:
             )
 
         return dispatched, backup
-

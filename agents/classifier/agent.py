@@ -129,11 +129,7 @@ def _rule_based(inp: ClassifierInput) -> IncidentClassification:
     conf = best.confidence
     # Best-effort sub_type from upstream Vision evidence; fall back to a
     # generic label rather than always claiming KITCHEN_FIRE.
-    fire_sub = (
-        best.vision.sub_type
-        if best.vision and best.vision.sub_type
-        else "GENERAL_FIRE"
-    )
+    fire_sub = best.vision.sub_type if best.vision and best.vision.sub_type else "GENERAL_FIRE"
     if hint == IncidentCategory.FIRE and conf >= 0.8:
         sev = Severity.S2_URGENT
         rationale = "High-confidence fire signal with cascade risk."

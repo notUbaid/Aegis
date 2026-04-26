@@ -34,7 +34,7 @@ import {
   type ServiceName,
   type DrillStep,
 } from "@/lib/actions";
-import { useAuth } from "@aegis/ui-web";
+import { useAuth, doSignOut } from "@aegis/ui-web";
 
 const DEFAULT_VENUE_ID = process.env.NEXT_PUBLIC_DEMO_VENUE_ID || "taj-ahmedabad";
 
@@ -267,7 +267,8 @@ export default function ControlRoom() {
         now={now}
         health={health}
         onDrill={() => setDrillOpen(true)}
-        userInitial={(user?.displayName ?? user?.email ?? "?")[0]?.toUpperCase() ?? "?"}
+        userName={user?.displayName ?? null}
+        userEmail={user?.email ?? null}
       />
       {drillOpen ? (
         <DrillModal
@@ -341,6 +342,187 @@ export default function ControlRoom() {
   );
 }
 
+// ── Profile Menu ───────────────────────────────────────────────────────────
+function ProfileMenu({ userName, userEmail }: { userName: string | null; userEmail: string | null }) {
+  const initial = (userName ?? userEmail ?? "?")[0]?.toUpperCase() ?? "?";
+  const [open, setOpen] = React.useState(false);
+  const [theme, setTheme] = React.useState<"dark" | "light">("dark");
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const stored = localStorage.getItem("aegis-theme") as "dark" | "light" | null;
+    if (stored === "light" || stored === "dark") setTheme(stored);
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next === "light" ? "light" : "");
+    localStorage.setItem("aegis-theme", next);
+  }
+
+  async function handleSignOut() {
+    setOpen(false);
+    await doSignOut();
+  }
+
+  const isDark = theme === "dark";
+
+  return (
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Profile menu"
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: 999,
+          background: open ? "rgba(20,184,166,0.15)" : "var(--c-bg-surface)",
+          border: `1px solid ${open ? "rgba(20,184,166,0.5)" : "var(--c-border-strong)"}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 11,
+          fontWeight: 600,
+          color: open ? "#14b8a6" : "var(--c-ink-secondary)",
+          cursor: "pointer",
+          transition: "all 140ms ease",
+          flexShrink: 0,
+        }}
+      >
+        {initial}
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: 36,
+            right: 0,
+            width: 224,
+            background: "var(--c-bg-elevated)",
+            border: "1px solid var(--c-border-strong)",
+            borderRadius: 14,
+            boxShadow: "0 20px 60px rgba(2,6,23,0.5), 0 4px 16px rgba(2,6,23,0.3)",
+            overflow: "hidden",
+            zIndex: 200,
+          }}
+        >
+          {/* User header */}
+          <div style={{ padding: "14px 16px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              background: "rgba(20,184,166,0.13)",
+              border: "1px solid rgba(20,184,166,0.35)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+              fontWeight: 700,
+              color: "#14b8a6",
+              flexShrink: 0,
+            }}>
+              {initial}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              {userName && (
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--c-ink-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {userName}
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: "var(--c-ink-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {userEmail ?? "—"}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "var(--c-border)" }} />
+
+          {/* Theme toggle */}
+          <button
+            onClick={toggleTheme}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "10px 16px",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--c-ink-secondary)",
+              fontSize: 13,
+              fontFamily: "inherit",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(148,163,184,0.08)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          >
+            {isDark ? (
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                <circle cx={12} cy={12} r={5} />
+                <line x1={12} y1={1} x2={12} y2={3} /><line x1={12} y1={21} x2={12} y2={23} />
+                <line x1={4.22} y1={4.22} x2={5.64} y2={5.64} /><line x1={18.36} y1={18.36} x2={19.78} y2={19.78} />
+                <line x1={1} y1={12} x2={3} y2={12} /><line x1={21} y1={12} x2={23} y2={12} />
+                <line x1={4.22} y1={19.78} x2={5.64} y2={18.36} /><line x1={18.36} y1={5.64} x2={19.78} y2={4.22} />
+              </svg>
+            ) : (
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+            <span>{isDark ? "Light mode" : "Dark mode"}</span>
+            <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--c-ink-muted)", background: "var(--c-bg-surface)", borderRadius: 4, padding: "1px 5px" }}>
+              {isDark ? "DARK" : "LIGHT"}
+            </span>
+          </button>
+
+          <div style={{ height: 1, background: "var(--c-border)" }} />
+
+          {/* Sign out */}
+          <button
+            onClick={() => void handleSignOut()}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "10px 16px",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              color: "#ef4444",
+              fontSize: 13,
+              fontFamily: "inherit",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.08)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          >
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1={21} y1={12} x2={9} y2={12} />
+            </svg>
+            <span>Sign out</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Top Bar ────────────────────────────────────────────────────────────────
 function TopBar({
   venueState,
@@ -354,7 +536,8 @@ function TopBar({
   now,
   health,
   onDrill,
-  userInitial,
+  userName,
+  userEmail,
 }: {
   venueState: "Critical" | "Elevated" | "Nominal";
   criticalCount: number;
@@ -367,7 +550,8 @@ function TopBar({
   now: Date | null;
   health: Record<ServiceName, boolean> | null;
   onDrill: () => void;
-  userInitial: string;
+  userName: string | null;
+  userEmail: string | null;
 }) {
   const stateColor =
     venueState === "Critical" ? "#dc2626" : venueState === "Elevated" ? "#f59e0b" : "#10b981";
@@ -381,7 +565,7 @@ function TopBar({
         height: 52,
         borderBottom: "1px solid rgba(51,65,85,0.5)",
         flexShrink: 0,
-        background: "rgba(10,14,20,0.7)",
+        background: "var(--c-topbar-bg)",
         backdropFilter: "blur(12px)",
         zIndex: 10,
         position: "relative",
@@ -473,23 +657,7 @@ function TopBar({
       <button onClick={onDrill} style={btnTealStyle({ fontSize: 11, padding: "5px 12px" })}>
         Run drill
       </button>
-      <div
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 999,
-          background: "var(--c-bg-surface)",
-          border: "1px solid var(--c-border-strong)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 11,
-          fontWeight: 600,
-          color: "var(--c-ink-secondary)",
-        }}
-      >
-        {userInitial}
-      </div>
+      <ProfileMenu userName={userName} userEmail={userEmail} />
     </div>
   );
 }

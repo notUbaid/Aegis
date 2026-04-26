@@ -3,6 +3,7 @@
   --c-bg-elevated: #121821;
   --c-bg-surface: #1a2230;
   --c-bg-panel: rgba(18, 24, 33, 0.84);
+  --c-topbar-bg: rgba(10, 14, 20, 0.7);
   --c-ink-primary: #f1f5f9;
   --c-ink-secondary: #94a3b8;
   --c-ink-muted: #64748b;
@@ -26,6 +27,19 @@
   font-family: var(--font-body);
 }
 
+[data-theme="light"] {
+  --c-bg-primary: #f8fafc;
+  --c-bg-elevated: #ffffff;
+  --c-bg-surface: #f1f5f9;
+  --c-bg-panel: rgba(255, 255, 255, 0.9);
+  --c-topbar-bg: rgba(248, 250, 252, 0.85);
+  --c-ink-primary: #0f172a;
+  --c-ink-secondary: #475569;
+  --c-ink-muted: #94a3b8;
+  --c-border: #e2e8f0;
+  --c-border-strong: #cbd5e1;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -46,6 +60,15 @@ body {
   overscroll-behavior-y: none;
 }
 
+[data-theme="light"],
+[data-theme="light"] body {
+  background:
+    radial-gradient(circle at top left, rgba(20, 184, 166, 0.07), transparent 28%),
+    radial-gradient(circle at top right, rgba(220, 38, 38, 0.05), transparent 30%),
+    linear-gradient(180deg, #effdf9 0%, #f8fafc 40%, #f1f5f9 100%);
+  color: var(--c-ink-primary);
+}
+
 body::before {
   content: "";
   position: fixed;
@@ -56,6 +79,30 @@ body::before {
     linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
   background-size: 96px 96px;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.8), transparent 85%);
+}
+
+[data-theme="light"] body::before {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+}
+
+[data-theme="light"] .panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), transparent 42%),
+    var(--c-bg-panel);
+  border-color: rgba(203, 213, 225, 0.9);
+  box-shadow:
+    0 4px 24px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  color: var(--c-ink-primary);
+  background: var(--c-bg-elevated);
+  border-color: var(--c-border);
 }
 
 button {

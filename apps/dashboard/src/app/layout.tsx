@@ -41,6 +41,8 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${bodyFont.variable} ${monoFont.variable}`}>
       <body>
+        {/* Runs before hydration to restore saved theme without flash */}
+        <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem('aegis-theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}` }} />
         <UIProvider><AuthProvider>{children}</AuthProvider></UIProvider>
       </body>
     </html>

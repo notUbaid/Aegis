@@ -34,7 +34,6 @@ from aegis_shared.auth import Principal, verify_request
 from aegis_shared.errors import AegisError
 from aegis_shared.fcm import send_to_tokens
 from aegis_shared.firestore import (
-    get_dispatch_by_id,
     get_fcm_tokens_for_responder,
     get_incident,
     update_incident_status,
@@ -293,7 +292,7 @@ async def _schedule_ack_timeout(dispatch_id: str) -> None:
     if entry.get("status") == DispatchStatus.PAGED:
         await _record(dispatch_id, DispatchStatus.TIMED_OUT)
         log.warning("dispatch_ack_timeout", dispatch_id=dispatch_id)
-        await _page_next_in_chain(persisted)
+        await _page_next_in_chain(entry)
 
 
 def _arm_timeout(dispatch_id: str) -> None:

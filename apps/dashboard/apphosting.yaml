@@ -56,5 +56,5 @@ env:
 
   # ---- Cross-app link (App Hosting backend URL for the staff PWA) ----
   - variable: NEXT_PUBLIC_STAFF_URL
-    value: REPLACE_WITH_STAFF_APPHOSTING_URL
+    value: https://aegis-staff--aegis-gsc-2026.asia-southeast1.hosted.app
     availability: [BUILD, RUNTIME]

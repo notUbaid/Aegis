@@ -151,6 +151,7 @@ def test_get_dispatch_falls_back_to_firestore(client: TestClient, app_module) ->
     assert body["incident_id"] == "INC-9"
     assert body["responder_id"] == "RSP-kavya"
 
+
 def test_create_dispatch_emits_fcm(client: TestClient, app_module) -> None:
     payload = {
         "dispatch_id": "DSP-xyz",

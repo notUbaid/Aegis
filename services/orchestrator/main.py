@@ -370,10 +370,12 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
             "classification": classification.model_dump(mode="json"),
             "drill": result.drill_mode,
         }
-        incident = incident.model_copy(update={
-            "s1_hitl_gated": True,
-            "advisory_dispatch_plan": advisory,
-        })
+        incident = incident.model_copy(
+            update={
+                "s1_hitl_gated": True,
+                "advisory_dispatch_plan": advisory,
+            }
+        )
 
     # Firestore: incident + classified event
     await upsert_incident(incident)

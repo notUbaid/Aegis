@@ -197,8 +197,15 @@ async def get_incident(incident_id: str) -> dict[str, Any] | None:
 
 
 _OPEN_STATUSES = {
-    "DETECTED", "CLASSIFIED", "DISPATCHED", "ACKNOWLEDGED",
-    "EN_ROUTE", "ON_SCENE", "TRIAGED", "RESOLVING", "VERIFIED",
+    "DETECTED",
+    "CLASSIFIED",
+    "DISPATCHED",
+    "ACKNOWLEDGED",
+    "EN_ROUTE",
+    "ON_SCENE",
+    "TRIAGED",
+    "RESOLVING",
+    "VERIFIED",
 }
 
 

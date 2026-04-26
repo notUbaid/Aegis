@@ -34,6 +34,7 @@ from aegis_shared.errors import AegisError
 from aegis_shared.fcm import send_to_tokens
 from aegis_shared.firestore import (
     get_dispatch_by_id,
+    get_fcm_tokens_for_responder,
     update_incident_status,
     upsert_dispatch,
 )
@@ -361,12 +362,20 @@ async def create_dispatch(req: CreateDispatch) -> DispatchState:
 
         title = f"Aegis · {req.severity} {req.category}"
         body = req.rationale or f"Incident {req.incident_id} needs your attention."
-        if req.fcm_tokens:
+
+        # Merge tokens passed inline (from orchestrator's dispatch_event payload)
+        # with tokens fetched live from Firestore /users/{uid}/devices.
+        # Firestore is the authoritative source; inline tokens are a fallback
+        # for cases where the orchestrator has pre-fetched them.
+        firestore_tokens = await get_fcm_tokens_for_responder(req.responder_id)
+        all_tokens = list({*req.fcm_tokens, *firestore_tokens})
+
+        if all_tokens:
             # FCM Admin SDK is sync HTTP. Hand off to a worker thread so the
             # endpoint does not block the event loop for ~300ms per token.
             await asyncio.to_thread(
                 send_to_tokens,
-                req.fcm_tokens,
+                all_tokens,
                 title=title,
                 body=body,
                 data={

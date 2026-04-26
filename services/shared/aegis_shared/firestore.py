@@ -159,38 +159,69 @@ async def get_responders_for_venue(venue_id: str) -> list[dict[str, Any]]:
         return []
 
 
- async def get_dispatch_by_id(dispatch_id: str) -> dict[str, Any] | None:
-     """Return a dispatch document from any incident subcollection."""
-     client = _client_or_none()
-     if client is None:
-         return None
-     try:
-         # Use the FieldFilter form — positional ``.where("x", "==", y)`` is
-         # deprecated in google-cloud-firestore >= 2.16 and will be removed.
-         from google.cloud.firestore_v1.base_query import FieldFilter
+async def get_dispatch_by_id(dispatch_id: str) -> dict[str, Any] | None:
+    """Return a dispatch document from any incident subcollection."""
+    client = _client_or_none()
+    if client is None:
+        return None
+    try:
+        # Use the FieldFilter form — positional ``.where("x", "==", y)`` is
+        # deprecated in google-cloud-firestore >= 2.16 and will be removed.
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        query = (
+            client.collection_group("dispatches")
+            .where(filter=FieldFilter("dispatch_id", "==", dispatch_id))
+            .limit(1)
+        )
+        snapshot = await query.get()
+        if not snapshot:
+            return None
+        return snapshot[0].to_dict()
+    except Exception as exc:
+        log.warning("firestore_dispatch_fetch_failed", dispatch_id=dispatch_id, error=str(exc))
+        return None
  
-         query = (
-             client.collection_group("dispatches")
-             .where(filter=FieldFilter("dispatch_id", "==", dispatch_id))
-             .limit(1)
-         )
-         snapshot = await query.get()
-         if not snapshot:
-             return None
-         return snapshot[0].to_dict()
-     except Exception as exc:
-         log.warning("firestore_dispatch_fetch_failed", dispatch_id=dispatch_id, error=str(exc))
-         return None
  
- 
- async def get_incident(incident_id: str) -> dict[str, Any] | None:
-     """Return an incident document by ID."""
-     client = _client_or_none()
-     if client is None:
-         return None
-     try:
-         doc = await client.collection("incidents").document(incident_id).get()
-         return doc.to_dict() if doc.exists else None
-     except Exception as exc:
-         log.warning("firestore_incident_fetch_failed", incident_id=incident_id, error=str(exc))
-         return None
+async def get_incident(incident_id: str) -> dict[str, Any] | None:
+    """Return an incident document by ID."""
+    client = _client_or_none()
+    if client is None:
+        return None
+    try:
+        doc = await client.collection("incidents").document(incident_id).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as exc:
+        log.warning("firestore_incident_fetch_failed", incident_id=incident_id, error=str(exc))
+        return None
+
+
+async def get_fcm_tokens_for_responder(responder_id: str) -> list[str]:
+    """Return all active FCM tokens for a responder.
+
+    Queries /users where responder_id matches, then reads each user's
+    /users/{uid}/devices subcollection and collects token strings.
+    Returns empty list on any failure — callers treat push as best-effort.
+    """
+    client = _client_or_none()
+    if client is None:
+        return []
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        user_docs = await (
+            client.collection("users")
+            .where(filter=FieldFilter("responder_id", "==", responder_id))
+            .get()
+        )
+        tokens: list[str] = []
+        for user_doc in user_docs:
+            devices = await user_doc.reference.collection("devices").get()
+            for device in devices:
+                token = device.to_dict().get("token", "")
+                if token:
+                    tokens.append(token)
+        return tokens
+    except Exception as exc:
+        log.warning("firestore_fcm_tokens_fetch_failed", responder_id=responder_id, error=str(exc))
+        return []

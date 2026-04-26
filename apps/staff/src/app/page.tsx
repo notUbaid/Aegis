@@ -25,6 +25,7 @@ import { useRouter } from "next/navigation";
 import { VENUE, SEV_LABEL, zoneById, responderById } from "@/lib/venue";
 import { useUI } from "@/lib/ui";
 import { callDispatch } from "@/lib/actions";
+import { useFcmToken } from "@/lib/useFcmToken";
 
 const DEFAULT_VENUE_ID = process.env.NEXT_PUBLIC_DEMO_VENUE_ID || "taj-ahmedabad";
 
@@ -69,6 +70,9 @@ export default function StaffApp() {
   const [error, setError] = React.useState<string | null>(null);
   const ui = useUI();
   const router = useRouter();
+
+  // ── FCM push token registration ────────────────────────────────────────
+  useFcmToken(user);
 
   // ── Auth guard ──────────────────────────────────────────────────────────
   React.useEffect(() => {

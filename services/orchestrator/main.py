@@ -31,6 +31,7 @@ from aegis_shared.firestore import (
     get_active_incident,
     get_responders_for_venue,
     get_incident,
+    patch_incident_fields,
     upsert_dispatch,
     upsert_incident,
 )
@@ -221,6 +222,78 @@ async def _resolve_responders(
     return DEMO_RESPONDERS
 
 
+# ---- Helpers ----
+
+
+async def _write_dispatches(
+    venue_id: str,
+    incident_id: str,
+    zone_id: str,
+    classification_json: dict[str, Any],
+    dispatched_entries: list[dict[str, Any]],
+    backup_ladder: list[dict[str, Any]],
+    required_skills: list[ResponderSkill],
+    drill: bool,
+    settings: Any,
+) -> bool:
+    """Materialise dispatch records + publish events. Returns True if any were written."""
+    escalation_chain = [
+        EscalationEntry(
+            responder_id=b["responder_id"],
+            role=b["role"],
+            rationale=b.get("rationale", ""),
+        )
+        for b in backup_ladder
+    ]
+    escalation_chain_json = [e.model_dump(mode="json") for e in escalation_chain]
+
+    dispatched = False
+    for entry in dispatched_entries:
+        dispatch = Dispatch(
+            venue_id=venue_id,
+            incident_id=incident_id,
+            responder_id=entry["responder_id"],
+            role=entry["role"],
+            status=DispatchStatus.PAGED,
+            required_skills=required_skills,
+            notes=entry.get("rationale", ""),
+            escalation_chain=escalation_chain,
+        )
+        await upsert_dispatch(dispatch)
+
+        dispatch_event = DispatchEvent(
+            venue_id=venue_id,
+            incident_id=incident_id,
+            dispatch_id=dispatch.dispatch_id,
+            to_status=DispatchStatus.PAGED,
+            payload={
+                "responder_id": entry["responder_id"],
+                "role": entry["role"],
+                "score": entry.get("score"),
+                "eta_seconds": entry.get("eta_seconds"),
+                "severity": classification_json.get("severity"),
+                "category": classification_json.get("category"),
+                "zone_id": zone_id,
+                "rationale": entry.get("rationale", ""),
+                "drill": drill,
+                "escalation_chain": escalation_chain_json,
+            },
+        )
+        publish_json(
+            settings.pubsub_topic_dispatch,
+            dispatch_event,
+            ordering_key=f"{venue_id}:{incident_id}",
+            attributes={
+                "venue_id": venue_id,
+                "incident_id": incident_id,
+                "dispatch_id": dispatch.dispatch_id,
+            },
+        )
+        dispatched = True
+
+    return dispatched
+
+
 # ---- Routes ----
 
 
@@ -285,6 +358,21 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
         )
         incident = incident.model_copy(update={"incident_id": existing["incident_id"]})
 
+    # Store advisory plan when S1 is HITL-gated so operator can approve later.
+    required_skills = _derive_required_skills(classification, [])
+    if result.s1_hitl_gated:
+        advisory: dict[str, Any] = {
+            "dispatched": [e.model_dump(mode="json") for e in result.dispatch.dispatched],
+            "backup_ladder": [b.model_dump(mode="json") for b in result.dispatch.backup_ladder],
+            "required_skills": [s.value for s in required_skills],
+            "classification": classification.model_dump(mode="json"),
+            "drill": result.drill_mode,
+        }
+        incident = incident.model_copy(update={
+            "s1_hitl_gated": True,
+            "advisory_dispatch_plan": advisory,
+        })
+
     # Firestore: incident + classified event
     await upsert_incident(incident)
     classified_event = IncidentEvent(
@@ -317,71 +405,25 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
     # SAFETY GATE: S1 incidents in non-autonomous mode require operator approval.
     # We still return the advisory plan but skip materialising real pages.
     dispatched = False
-    required_skills = _derive_required_skills(classification, [])
     if result.s1_hitl_gated:
-        log_gate = get_logger(__name__)
-        log_gate.warning(
+        get_logger(__name__).warning(
             "s1_dispatch_gated",
             incident_id=incident.incident_id,
             venue_id=incident.venue_id,
             reason="autonomous_mode=false; advisory only",
         )
     else:
-        # Build escalation chain from the dispatcher's backup_ladder.
-        # Each primary dispatch carries the full chain so any one can escalate
-        # independently if the paged responder doesn't respond.
-        escalation_chain = [
-            EscalationEntry(
-                responder_id=b.responder_id,
-                role=b.role,
-                rationale=b.rationale,
-            )
-            for b in result.dispatch.backup_ladder
-        ]
-        escalation_chain_json = [e.model_dump(mode="json") for e in escalation_chain]
-
-        for entry in result.dispatch.dispatched:
-            dispatch = Dispatch(
-                venue_id=incident.venue_id,
-                incident_id=incident.incident_id,
-                responder_id=entry.responder_id,
-                role=entry.role,
-                status=DispatchStatus.PAGED,
-                required_skills=required_skills,
-                notes=entry.rationale,
-                escalation_chain=escalation_chain,
-            )
-            await upsert_dispatch(dispatch)
-
-            dispatch_event = DispatchEvent(
-                venue_id=incident.venue_id,
-                incident_id=incident.incident_id,
-                dispatch_id=dispatch.dispatch_id,
-                to_status=DispatchStatus.PAGED,
-                payload={
-                    "responder_id": entry.responder_id,
-                    "role": entry.role,
-                    "score": entry.score,
-                    "eta_seconds": entry.eta_seconds,
-                    "severity": classification.severity.value,
-                    "category": classification.category.value,
-                    "zone_id": incident.zone_id,
-                    "rationale": entry.rationale,
-                    "drill": result.drill_mode,
-                    "escalation_chain": escalation_chain_json,
-                },
-            )
-            publish_json(
-                settings.pubsub_topic_dispatch,
-                dispatch_event,
-                ordering_key=f"{incident.venue_id}:{incident.incident_id}",
-                attributes={
-                    "venue_id": incident.venue_id,
-                    "incident_id": incident.incident_id,
-                    "dispatch_id": dispatch.dispatch_id,
-                },
-            )
-            dispatched = True
+        dispatched = await _write_dispatches(
+            venue_id=incident.venue_id,
+            incident_id=incident.incident_id,
+            zone_id=incident.zone_id,
+            classification_json=classification.model_dump(mode="json"),
+            dispatched_entries=[e.model_dump(mode="json") for e in result.dispatch.dispatched],
+            backup_ladder=[b.model_dump(mode="json") for b in result.dispatch.backup_ladder],
+            required_skills=required_skills,
+            drill=result.drill_mode,
+            settings=settings,
+        )
 
     reasoning = classification.rationale
     if result.cascade.rationale:
@@ -436,6 +478,71 @@ async def add_incident_event(
     )
     await append_incident_event(incident_id, event)
     return {"ok": "true"}
+
+
+@app.post("/v1/incidents/{incident_id}/approve-dispatch")
+async def approve_dispatch(
+    incident_id: str,
+    principal: Principal = Depends(verify_request),
+) -> dict[str, str]:
+    """Operator approves dispatch for an S1 HITL-gated incident.
+
+    Materialises the advisory dispatch plan, clears the gate flag, and appends
+    an approval audit event. Requires Firebase Auth.
+    """
+    if principal.is_anonymous:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    doc = await get_incident(incident_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if not doc.get("s1_hitl_gated"):
+        raise HTTPException(status_code=400, detail="Incident not awaiting S1 approval")
+
+    advisory = doc.get("advisory_dispatch_plan")
+    if not advisory:
+        raise HTTPException(status_code=400, detail="No advisory dispatch plan stored")
+
+    settings = get_settings()
+    classification_json: dict[str, Any] = advisory.get("classification", {})
+    required_skills = [
+        ResponderSkill(s)
+        for s in advisory.get("required_skills", [])
+        if s in ResponderSkill._value2member_map_
+    ]
+
+    dispatched = await _write_dispatches(
+        venue_id=doc["venue_id"],
+        incident_id=incident_id,
+        zone_id=doc["zone_id"],
+        classification_json=classification_json,
+        dispatched_entries=advisory.get("dispatched", []),
+        backup_ladder=advisory.get("backup_ladder", []),
+        required_skills=required_skills,
+        drill=bool(advisory.get("drill", False)),
+        settings=settings,
+    )
+
+    await patch_incident_fields(incident_id, {"s1_hitl_gated": False})
+
+    approval_event = IncidentEvent(
+        venue_id=doc["venue_id"],
+        incident_id=incident_id,
+        from_status=IncidentStatus.CLASSIFIED,
+        to_status=IncidentStatus.DISPATCHED,
+        actor_type="human",
+        actor_id=principal.uid,
+        payload={"approved": True, "dispatched": dispatched},
+    )
+    await append_incident_event(incident_id, approval_event)
+
+    get_logger(__name__).info(
+        "s1_dispatch_approved",
+        incident_id=incident_id,
+        actor=principal.uid,
+        dispatched=dispatched,
+    )
+    return {"ok": "true", "dispatched": str(dispatched).lower()}
 
 
 # ---- Pub/Sub push subscriber ----

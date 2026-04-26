@@ -136,6 +136,17 @@ export async function escalateIncident(
   }
 }
 
+export async function approveS1Dispatch(incidentId: string): Promise<void> {
+  const res = await fetch(`${ORCH_BASE}/v1/incidents/${incidentId}/approve-dispatch`, {
+    method: "POST",
+    headers: await getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`approve dispatch failed: ${res.status} ${txt}`);
+  }
+}
+
 export async function addOperatorNote(incidentId: string, text: string) {
   const res = await fetch(`${ORCH_BASE}/v1/incidents/${incidentId}/events`, {
     method: "POST",

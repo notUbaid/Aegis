@@ -27,6 +27,7 @@ import { useUI } from "@/lib/ui";
 import {
   acknowledgeIncident,
   addOperatorNote,
+  approveS1Dispatch,
   callDispatch,
   dismissIncident,
   escalateIncident,
@@ -233,7 +234,6 @@ export default function IncidentDetailPage() {
        ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
      }
    }
-  }
 
   async function handleAcknowledge() {
     if (!incident) return;
@@ -242,6 +242,29 @@ export default function IncidentDetailPage() {
       ui.toast("Incident acknowledged", { tone: "success" });
     } catch (err) {
       ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    }
+  }
+
+  async function handleApproveDispatch() {
+    if (!incident) return;
+    const ok = await ui.confirm({
+      title: "Approve S1 dispatch?",
+      message: "Materialises the advisory dispatch plan and pages all assigned responders. This action is irreversible.",
+      tone: "danger",
+      confirmLabel: "Approve & dispatch",
+    });
+    if (!ok) return;
+    setActing(true);
+    setActionError(null);
+    try {
+      await approveS1Dispatch(incident.incident_id);
+      ui.toast("Dispatch approved — responders paged", { tone: "success", title: "S1 Approved" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionError(msg);
+      ui.toast(msg, { tone: "danger", title: "Approval failed" });
+    } finally {
+      setActing(false);
     }
   }
 
@@ -387,6 +410,75 @@ export default function IncidentDetailPage() {
           <StatusLadder status={incident.status} />
         </div>
 
+        {incident.s1_hitl_gated ? (
+          <div
+            style={{
+              marginBottom: 18,
+              padding: "16px 20px",
+              borderRadius: 14,
+              background: "rgba(220,38,38,0.08)",
+              border: "1.5px solid rgba(220,38,38,0.45)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <span
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                  letterSpacing: "0.12em",
+                  color: "#dc2626",
+                  padding: "3px 8px",
+                  background: "rgba(220,38,38,0.15)",
+                  borderRadius: 6,
+                  border: "1px solid rgba(220,38,38,0.4)",
+                }}
+              >
+                S1 HITL GATE
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#dc2626" }}>
+                Awaiting operator approval before dispatch fires
+              </span>
+            </div>
+            {(() => {
+              const advisory = incident.advisory_dispatch_plan as Record<string, unknown> | null | undefined;
+              const planned = (advisory?.dispatched as {responder_id?: string; role?: string; rationale?: string}[] | undefined) ?? [];
+              return planned.length > 0 ? (
+                <div style={{ marginBottom: 12, fontSize: 12, color: "var(--c-ink-secondary)" }}>
+                  <span style={{ color: "var(--c-ink-muted)", fontFamily: "var(--font-mono)", fontSize: 10 }}>ADVISORY PLAN · </span>
+                  {planned.map((p, i) => (
+                    <span key={i}>
+                      {i > 0 ? " · " : ""}
+                      <span style={{ color: "var(--c-ink-primary)", fontWeight: 500 }}>{p.responder_id}</span>
+                      {" "}({p.role})
+                    </span>
+                  ))}
+                </div>
+              ) : null;
+            })()}
+            <button
+              onClick={handleApproveDispatch}
+              disabled={acting}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 16px",
+                borderRadius: 10,
+                fontSize: 13,
+                fontWeight: 600,
+                border: "1px solid rgba(220,38,38,0.5)",
+                cursor: acting ? "not-allowed" : "pointer",
+                background: "rgba(220,38,38,0.18)",
+                color: "#dc2626",
+                fontFamily: "inherit",
+                opacity: acting ? 0.6 : 1,
+              }}
+            >
+              {acting ? "Approving…" : "Approve & dispatch now"}
+            </button>
+          </div>
+        ) : null}
+
         {!closed ? (
           <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
             <button onClick={handleAcknowledge} style={btnTealStyle({ padding: "8px 14px", fontSize: 13 })}>
@@ -493,6 +585,47 @@ export default function IncidentDetailPage() {
                 </div>
               </div>
             ) : null}
+
+            {(() => {
+              const classifiedEvent = events.find((e) => e.to_status === "CLASSIFIED");
+              const agentTrace = classifiedEvent?.payload?.agent_trace as string[] | undefined;
+              if (!agentTrace || agentTrace.length === 0) return null;
+              return (
+                <div className="glass" style={glassStyle({ padding: 20 })}>
+                  <Eyebrow style={{ marginBottom: 12 }}>Agent trace</Eyebrow>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {agentTrace.map((step, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 10,
+                          padding: "7px 10px",
+                          background: "rgba(255,255,255,0.02)",
+                          borderRadius: 8,
+                          fontSize: 12,
+                          color: "var(--c-ink-secondary)",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 10,
+                            color: "#14b8a6",
+                            minWidth: 18,
+                            marginTop: 1,
+                          }}
+                        >
+                          {String(i + 1).padStart(2, "0")}
+                        </span>
+                        {step}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="glass" style={glassStyle({ padding: 20 })}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>

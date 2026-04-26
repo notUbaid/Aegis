@@ -77,7 +77,7 @@ asyncio_mode = "auto"
 # installed in every venv.
 
 [tool.coverage.run]
-source = ["services"]
+source = ["."]
 omit = ["*/tests/*", "*/__init__.py"]
 
 [tool.coverage.report]

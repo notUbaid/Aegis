@@ -35,6 +35,7 @@ from aegis_shared.fcm import send_to_tokens
 from aegis_shared.firestore import (
     get_dispatch_by_id,
     get_fcm_tokens_for_responder,
+    get_incident,
     update_incident_status,
     upsert_dispatch,
 )
@@ -46,8 +47,9 @@ from aegis_shared.schemas import (
     PubSubEnvelope,
     new_id,
 )
+from aegis_shared.auth import Principal, verify_request
 from aegis_shared.security import apply_security_middleware
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -125,8 +127,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
-app.state.memory_store = {}
-app.state.pending_timeouts = {}
+app.state.pending_timeouts = {}  # asyncio tasks — per-process, best-effort
 log = get_logger(__name__)
 
 
@@ -150,6 +151,7 @@ class CreateDispatch(BaseModel):
     zone_id: str = ""
     rationale: str = ""
     fcm_tokens: list[str] = []
+    escalation_chain: list[dict[str, Any]] = []
     # Original dispatch-decision time on the orchestrator. When the message is
     # delivered via Pub/Sub there is propagation lag, so the dispatch service
     # honours this rather than stamping its own service-receive time.
@@ -194,16 +196,11 @@ async def _record(
     extra: dict[str, Any] | None = None,
 ) -> DispatchState:
     now = datetime.now(UTC)
-    store = app.state.memory_store
-    entry = store.get(dispatch_id)
-    if entry is None:
-        # Hydrate from Firestore so transitions survive restarts.
-        persisted = await get_dispatch_by_id(dispatch_id)
-        if persisted:
-            entry = _hydrate_dispatch_entry(persisted)
-            store[dispatch_id] = entry
-    if entry is None:
-        entry = {}
+
+    # Always read from Firestore — authoritative across all instances.
+    persisted = await get_dispatch_by_id(dispatch_id)
+    entry: dict[str, Any] = _hydrate_dispatch_entry(persisted) if persisted else {}
+
     current = entry.get("status")
     _validate_transition(current, status)
     if current == status and entry:
@@ -216,30 +213,29 @@ async def _record(
             status=status,
             last_updated_at=entry.get("last_updated_at", now),
         )
-    entry.update(
-        {
-            "dispatch_id": dispatch_id,
-            "status": status,
-            "last_updated_at": now,
-            "incident_id": incident_id or entry.get("incident_id"),
-            "venue_id": venue_id or entry.get("venue_id"),
-            "responder_id": responder_id or entry.get("responder_id"),
-        }
-    )
-    if extra:
-        entry.update(extra)
-    store[dispatch_id] = entry
 
-    if entry.get("incident_id") and entry.get("venue_id"):
-        paged_at = entry.get("paged_at")
+    updated: dict[str, Any] = {
+        **entry,
+        "dispatch_id": dispatch_id,
+        "status": status,
+        "last_updated_at": now,
+        "incident_id": incident_id or entry.get("incident_id"),
+        "venue_id": venue_id or entry.get("venue_id"),
+        "responder_id": responder_id or entry.get("responder_id"),
+        **(extra or {}),
+    }
+
+    if updated.get("incident_id") and updated.get("venue_id"):
+        paged_at = updated.get("paged_at")
         dispatch = Dispatch(
             dispatch_id=dispatch_id,
-            venue_id=entry["venue_id"],
-            incident_id=entry["incident_id"],
-            responder_id=entry.get("responder_id", "unknown"),
-            role=entry.get("role", "Responder"),
+            venue_id=updated["venue_id"],
+            incident_id=updated["incident_id"],
+            responder_id=updated.get("responder_id", "unknown"),
+            role=updated.get("role", "Responder"),
             status=status,
-            notes=entry.get("rationale", ""),
+            notes=updated.get("rationale", ""),
+            escalation_chain=updated.get("escalation_chain", []),
             **({"paged_at": paged_at} if isinstance(paged_at, datetime) else {}),
         )
         if status == DispatchStatus.ACKNOWLEDGED:
@@ -253,8 +249,8 @@ async def _record(
         await upsert_dispatch(dispatch)
 
     await write_audit(
-        venue_id=entry.get("venue_id", "unknown"),
-        incident_id=entry.get("incident_id"),
+        venue_id=updated.get("venue_id", "unknown"),
+        incident_id=updated.get("incident_id"),
         action=f"dispatch.{status.value.lower()}",
         actor_type="human"
         if status
@@ -265,7 +261,7 @@ async def _record(
             DispatchStatus.HANDED_OFF,
         )
         else "system",
-        actor_id=entry.get("responder_id", "system"),
+        actor_id=updated.get("responder_id", "system"),
         output_obj={"dispatch_id": dispatch_id, "status": status.value},
         explanation=f"Dispatch {dispatch_id} transitioned to {status.value}.",
     )
@@ -274,28 +270,29 @@ async def _record(
         "dispatch_state_changed",
         dispatch_id=dispatch_id,
         status=status.value,
-        incident_id=entry.get("incident_id"),
+        incident_id=updated.get("incident_id"),
     )
     return DispatchState(
         dispatch_id=dispatch_id,
-        incident_id=entry.get("incident_id"),
-        venue_id=entry.get("venue_id"),
-        responder_id=entry.get("responder_id"),
+        incident_id=updated.get("incident_id"),
+        venue_id=updated.get("venue_id"),
+        responder_id=updated.get("responder_id"),
         status=status,
         last_updated_at=now,
     )
 
 
 async def _schedule_ack_timeout(dispatch_id: str) -> None:
-    """Wait ACK_TIMEOUT_SECONDS; if still PAGED, mark timed-out."""
+    """Wait ACK_TIMEOUT_SECONDS; if still PAGED in Firestore, mark timed-out and escalate."""
     await asyncio.sleep(ACK_TIMEOUT_SECONDS)
-    store = app.state.memory_store
-    entry = store.get(dispatch_id)
-    if not entry:
+    persisted = await get_dispatch_by_id(dispatch_id)
+    if not persisted:
         return
+    entry = _hydrate_dispatch_entry(persisted)
     if entry.get("status") == DispatchStatus.PAGED:
         await _record(dispatch_id, DispatchStatus.TIMED_OUT)
         log.warning("dispatch_ack_timeout", dispatch_id=dispatch_id)
+        await _page_next_in_chain(persisted)
 
 
 def _arm_timeout(dispatch_id: str) -> None:
@@ -312,23 +309,65 @@ def _cancel_timeout(dispatch_id: str) -> None:
         task.cancel()
 
 
-@app.post("/v1/dispatches", response_model=DispatchState)
-async def create_dispatch(req: CreateDispatch) -> DispatchState:
-    """Create a dispatch and send push. Usually invoked by the Pub/Sub subscriber.
+async def _page_next_in_chain(dispatch_doc: dict[str, Any]) -> None:
+    """Page the next backup responder when a dispatch is declined or timed out.
 
-    Idempotent under at-least-once Pub/Sub delivery: if the dispatch already
-    exists past PAGED (already acknowledged, en route, etc.), we skip the page
-    and FCM send entirely and return the current state.
+    Reads escalation_chain from the original dispatch doc, pops the first entry,
+    creates a new dispatch for them with the remaining chain. If the chain is
+    empty, logs a warning — all responders are exhausted.
     """
+    chain: list[dict[str, Any]] = dispatch_doc.get("escalation_chain", [])
+    if not chain:
+        log.warning(
+            "dispatch_chain_exhausted",
+            incident_id=dispatch_doc.get("incident_id"),
+            venue_id=dispatch_doc.get("venue_id"),
+        )
+        return
+
+    next_entry = chain[0]
+    remaining = chain[1:]
+
+    incident_id = dispatch_doc.get("incident_id", "")
+    venue_id = dispatch_doc.get("venue_id", "")
+
+    # Read incident for severity/category/zone — needed for FCM notification body.
+    severity, category, zone_id = "S2", "OTHER", ""
+    incident_doc = await get_incident(incident_id)
+    if incident_doc:
+        clf = incident_doc.get("classification") or {}
+        severity = clf.get("severity", "S2")
+        category = clf.get("category", "OTHER")
+        zone_id = incident_doc.get("zone_id", "")
+
+    log.info(
+        "dispatch_escalating",
+        incident_id=incident_id,
+        next_responder=next_entry.get("responder_id"),
+        remaining_chain_length=len(remaining),
+    )
+    await _do_create_dispatch(
+        CreateDispatch(
+            incident_id=incident_id,
+            venue_id=venue_id,
+            responder_id=next_entry.get("responder_id", ""),
+            role=next_entry.get("role", "Responder"),
+            severity=severity,
+            category=category,
+            zone_id=zone_id,
+            rationale=next_entry.get("rationale", ""),
+            escalation_chain=remaining,
+        )
+    )
+
+
+async def _do_create_dispatch(req: CreateDispatch) -> DispatchState:
+    """Business logic for dispatch creation — called by the HTTP route and the Pub/Sub subscriber."""
     dispatch_id = req.dispatch_id or new_id("DSP")
 
-    # Idempotency check (in-memory + Firestore hydration).
-    existing = app.state.memory_store.get(dispatch_id)
-    if existing is None:
-        persisted = await get_dispatch_by_id(dispatch_id)
-        if persisted:
-            existing = _hydrate_dispatch_entry(persisted)
-            app.state.memory_store[dispatch_id] = existing
+    # Idempotency: read authoritative state from Firestore.
+    persisted = await get_dispatch_by_id(dispatch_id)
+    existing = _hydrate_dispatch_entry(persisted) if persisted else None
     if existing and existing.get("status") and existing["status"] != DispatchStatus.PAGED:
         log.info(
             "dispatch_create_idempotent_skip",
@@ -355,6 +394,7 @@ async def create_dispatch(req: CreateDispatch) -> DispatchState:
             "role": req.role,
             "rationale": req.rationale,
             "paged_at": req.paged_at or datetime.now(UTC),
+            "escalation_chain": req.escalation_chain,
         },
     )
     if not already_paged:
@@ -391,20 +431,29 @@ async def create_dispatch(req: CreateDispatch) -> DispatchState:
     return state
 
 
+@app.post("/v1/dispatches", response_model=DispatchState)
+async def create_dispatch(
+    req: CreateDispatch,
+    _: Principal = Depends(verify_request),
+) -> DispatchState:
+    """Create a dispatch and send push. Authenticated; idempotent under at-least-once delivery."""
+    return await _do_create_dispatch(req)
+
+
 @app.post("/v1/dispatches/{dispatch_id}/ack", response_model=DispatchState)
-async def ack(dispatch_id: str) -> DispatchState:
+async def ack(dispatch_id: str, _: Principal = Depends(verify_request)) -> DispatchState:
     _cancel_timeout(dispatch_id)
     return await _record(dispatch_id, DispatchStatus.ACKNOWLEDGED)
 
 
 @app.post("/v1/dispatches/{dispatch_id}/enroute", response_model=DispatchState)
-async def enroute(dispatch_id: str) -> DispatchState:
+async def enroute(dispatch_id: str, _: Principal = Depends(verify_request)) -> DispatchState:
     _cancel_timeout(dispatch_id)
     return await _record(dispatch_id, DispatchStatus.EN_ROUTE)
 
 
 @app.post("/v1/dispatches/{dispatch_id}/arrived", response_model=DispatchState)
-async def arrived(dispatch_id: str) -> DispatchState:
+async def arrived(dispatch_id: str, _: Principal = Depends(verify_request)) -> DispatchState:
     _cancel_timeout(dispatch_id)
     state = await _record(dispatch_id, DispatchStatus.ARRIVED)
     if state.incident_id:
@@ -415,30 +464,32 @@ async def arrived(dispatch_id: str) -> DispatchState:
 
 
 @app.post("/v1/dispatches/{dispatch_id}/handoff", response_model=DispatchState)
-async def handoff(dispatch_id: str) -> DispatchState:
+async def handoff(dispatch_id: str, _: Principal = Depends(verify_request)) -> DispatchState:
     _cancel_timeout(dispatch_id)
     return await _record(dispatch_id, DispatchStatus.HANDED_OFF)
 
 
 @app.post("/v1/dispatches/{dispatch_id}/decline", response_model=DispatchState)
-async def decline(dispatch_id: str) -> DispatchState:
+async def decline(dispatch_id: str, _: Principal = Depends(verify_request)) -> DispatchState:
     _cancel_timeout(dispatch_id)
-    return await _record(dispatch_id, DispatchStatus.DECLINED)
+    # Read before recording so we have the chain regardless of Firestore merge timing.
+    persisted = await get_dispatch_by_id(dispatch_id)
+    state = await _record(dispatch_id, DispatchStatus.DECLINED)
+    if persisted:
+        await _page_next_in_chain(persisted)
+    return state
 
 
 @app.get("/v1/dispatches/{dispatch_id}", response_model=DispatchState)
-async def get_dispatch(dispatch_id: str) -> DispatchState:
-    entry = app.state.memory_store.get(dispatch_id)
-    if not entry:
-        persisted = await get_dispatch_by_id(dispatch_id)
-        if not persisted:
-            raise HTTPException(status_code=404, detail="dispatch not found")
-        entry = _hydrate_dispatch_entry(persisted)
-        app.state.memory_store[dispatch_id] = entry
-        # Re-arm the ack timeout so a restart cannot leave a PAGED dispatch
-        # without enforcement; the timer self-no-ops once the status moves on.
-        if entry["status"] == DispatchStatus.PAGED:
-            _arm_timeout(dispatch_id)
+async def get_dispatch(dispatch_id: str, _: Principal = Depends(verify_request)) -> DispatchState:
+    persisted = await get_dispatch_by_id(dispatch_id)
+    if not persisted:
+        raise HTTPException(status_code=404, detail="dispatch not found")
+    entry = _hydrate_dispatch_entry(persisted)
+    # Re-arm ACK timeout on any instance that reads a still-PAGED dispatch —
+    # ensures enforcement survives instance restarts.
+    if entry["status"] == DispatchStatus.PAGED:
+        _arm_timeout(dispatch_id)
     return DispatchState(
         dispatch_id=dispatch_id,
         incident_id=entry.get("incident_id"),
@@ -471,6 +522,7 @@ def _hydrate_dispatch_entry(data: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "paged_at": _coerce_datetime(paged_at) if paged_at else None,
         "last_updated_at": _latest_dispatch_timestamp(data),
+        "escalation_chain": data.get("escalation_chain", []),
     }
 
 
@@ -534,7 +586,7 @@ async def pubsub_dispatch_events(envelope: PubSubEnvelope) -> dict[str, str]:
             paged_at = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
         except ValueError:
             paged_at = None
-    await create_dispatch(
+    await _do_create_dispatch(
         CreateDispatch(
             dispatch_id=payload["dispatch_id"],
             incident_id=payload["incident_id"],
@@ -546,6 +598,7 @@ async def pubsub_dispatch_events(envelope: PubSubEnvelope) -> dict[str, str]:
             zone_id=data.get("zone_id", ""),
             rationale=data.get("rationale", ""),
             fcm_tokens=data.get("fcm_tokens", []),
+            escalation_chain=data.get("escalation_chain", []),
             paged_at=paged_at,
         )
     )

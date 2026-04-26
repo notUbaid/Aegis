@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { getDb, getFirebaseAuth, type Incident, type IncidentStatus, type Severity } from "@aegis/ui-web";
+import { getDb, getFirebaseAuth, getAuthHeaders, type Incident, type IncidentStatus, type Severity } from "@aegis/ui-web";
 import {
   collection,
   onSnapshot,
@@ -79,7 +79,7 @@ export async function acknowledgeIncident(incident: Incident) {
   const actor = getActorUid();
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/ack`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({ actor_id: actor }),
   });
   if (!res.ok) {
@@ -92,7 +92,7 @@ export async function dismissIncident(incident: Incident) {
   const actor = getActorUid();
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/status`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({ status: "DISMISSED", actor_id: actor, reason: "false_positive" }),
   });
   if (!res.ok) {
@@ -105,7 +105,7 @@ export async function resolveIncident(incident: Incident) {
   const actor = getActorUid();
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/status`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({ status: "CLOSED", actor_id: actor }),
   });
   if (!res.ok) {
@@ -121,7 +121,7 @@ export async function escalateIncident(
   const actor = getActorUid();
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${incident.incident_id}/status`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({
       status: "DISPATCHED",
       actor_id: actor,
@@ -139,7 +139,7 @@ export async function escalateIncident(
 export async function addOperatorNote(incidentId: string, text: string) {
   const res = await fetch(`${ORCH_BASE}/v1/incidents/${incidentId}/events`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({
       to_status: "NOTE",
       actor_type: "human",
@@ -158,6 +158,7 @@ export type DispatchAction = "ack" | "enroute" | "arrived" | "handoff" | "declin
 export async function callDispatch(dispatchId: string, action: DispatchAction): Promise<void> {
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${dispatchId}/${action}`, {
     method: "POST",
+    headers: await getAuthHeaders(),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
@@ -179,7 +180,7 @@ export interface PageRequest {
 export async function pageResponder(req: PageRequest): Promise<{ dispatch_id: string }> {
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({ ...req, fcm_tokens: [] }),
   });
   if (!res.ok) {

@@ -28,6 +28,7 @@ from aegis_shared import get_settings, setup_logging
 from aegis_shared.errors import AegisError
 from aegis_shared.firestore import (
     append_incident_event,
+    get_active_incident,
     get_responders_for_venue,
     get_incident,
     upsert_dispatch,
@@ -39,6 +40,7 @@ from aegis_shared.schemas import (
     Dispatch,
     DispatchEvent,
     DispatchStatus,
+    EscalationEntry,
     IncidentEvent,
     IncidentStatus,
     PerceptualSignal,
@@ -47,8 +49,8 @@ from aegis_shared.schemas import (
     new_id,
 )
 from aegis_shared.security import apply_security_middleware
-from aegis_shared.auth import verify_request
-from fastapi import FastAPI, HTTPException, Request, Depends
+from aegis_shared.auth import Principal, verify_request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -266,6 +268,23 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
     incident = result.incident
     classification = result.classification
 
+    # Dedup: reuse an existing open incident for the same zone+category within 5 min.
+    existing = await get_active_incident(
+        venue_id=req.venue_id,
+        zone_id=req.zone_id,
+        category=classification.category.value,
+        window_seconds=300,
+    )
+    if existing and existing["incident_id"] != incident.incident_id:
+        get_logger(__name__).info(
+            "incident_deduped",
+            existing_incident_id=existing["incident_id"],
+            discarded_incident_id=incident.incident_id,
+            category=classification.category.value,
+            zone_id=req.zone_id,
+        )
+        incident = incident.model_copy(update={"incident_id": existing["incident_id"]})
+
     # Firestore: incident + classified event
     await upsert_incident(incident)
     classified_event = IncidentEvent(
@@ -308,6 +327,19 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
             reason="autonomous_mode=false; advisory only",
         )
     else:
+        # Build escalation chain from the dispatcher's backup_ladder.
+        # Each primary dispatch carries the full chain so any one can escalate
+        # independently if the paged responder doesn't respond.
+        escalation_chain = [
+            EscalationEntry(
+                responder_id=b.responder_id,
+                role=b.role,
+                rationale=b.rationale,
+            )
+            for b in result.dispatch.backup_ladder
+        ]
+        escalation_chain_json = [e.model_dump(mode="json") for e in escalation_chain]
+
         for entry in result.dispatch.dispatched:
             dispatch = Dispatch(
                 venue_id=incident.venue_id,
@@ -317,6 +349,7 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
                 status=DispatchStatus.PAGED,
                 required_skills=required_skills,
                 notes=entry.rationale,
+                escalation_chain=escalation_chain,
             )
             await upsert_dispatch(dispatch)
 
@@ -335,6 +368,7 @@ async def handle_batch(req: HandleBatchRequest) -> HandleResponse:
                     "zone_id": incident.zone_id,
                     "rationale": entry.rationale,
                     "drill": result.drill_mode,
+                    "escalation_chain": escalation_chain_json,
                 },
             )
             publish_json(
@@ -383,14 +417,13 @@ class IncidentEventRequest(BaseModel):
 async def add_incident_event(
     incident_id: str,
     req: IncidentEventRequest,
-    principal: dict = Depends(verify_request),
+    principal: Principal = Depends(verify_request),
 ) -> dict[str, str]:
     """Append an incident event (e.g., operator note) on behalf of authenticated user.
 
     Requires Firebase Auth. actor_id is taken from the verified JWT, not the request body.
     """
-    uid = principal.get("uid", "")
-    if uid in ("anonymous", ""):
+    if principal.is_anonymous:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     event = IncidentEvent(
@@ -398,7 +431,7 @@ async def add_incident_event(
         incident_id=incident_id,
         to_status=req.to_status,
         actor_type=req.actor_type,
-        actor_id=uid,
+        actor_id=principal.uid,
         payload=req.payload,
     )
     await append_incident_event(incident_id, event)

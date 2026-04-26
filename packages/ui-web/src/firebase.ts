@@ -142,6 +142,18 @@ export async function doSignOut(): Promise<void> {
   await signOut(auth);
 }
 
+/** Return `{ Authorization: "Bearer <token>" }` for the signed-in user, or `{}`. */
+export async function getAuthHeaders(): Promise<Record<string, string>> {
+  const user = getFirebaseAuth().currentUser;
+  if (!user) return {};
+  try {
+    const token = await user.getIdToken();
+    return { Authorization: `Bearer ${token}` };
+  } catch {
+    return {};
+  }
+}
+
 // ── Firebase Messaging ────────────────────────────────────────────────────
 
 let _messaging: Messaging | null = null;

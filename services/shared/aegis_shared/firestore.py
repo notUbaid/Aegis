@@ -196,6 +196,74 @@ async def get_incident(incident_id: str) -> dict[str, Any] | None:
         return None
 
 
+_OPEN_STATUSES = {
+    "DETECTED", "CLASSIFIED", "DISPATCHED", "ACKNOWLEDGED",
+    "EN_ROUTE", "ON_SCENE", "TRIAGED", "RESOLVING", "VERIFIED",
+}
+
+
+async def get_active_incident(
+    venue_id: str,
+    zone_id: str,
+    category: str,
+    window_seconds: int = 300,
+) -> dict[str, Any] | None:
+    """Return an open incident for the same zone+category within the time window.
+
+    Queries the most-recent incidents for venue+zone, then filters status,
+    category, and detected_at in Python to avoid composite-index requirements.
+    Returns None if Firestore is unavailable — callers fall back to creating
+    a new incident.
+    """
+    from datetime import timedelta
+
+    client = _client_or_none()
+    if client is None:
+        return None
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        cutoff = (datetime.now(UTC) - timedelta(seconds=window_seconds)).isoformat()
+
+        snapshot = await (
+            client.collection("incidents")
+            .where(filter=FieldFilter("venue_id", "==", venue_id))
+            .where(filter=FieldFilter("zone_id", "==", zone_id))
+            .order_by("detected_at", direction="DESCENDING")
+            .limit(10)
+            .get()
+        )
+
+        for doc in snapshot:
+            data = doc.to_dict()
+            if data.get("status") not in _OPEN_STATUSES:
+                continue
+            detected_at = data.get("detected_at", "")
+            # detected_at is stored as ISO 8601 string; lexicographic compare is correct for UTC
+            if isinstance(detected_at, str) and detected_at < cutoff:
+                break  # ordered desc — all remaining docs are older
+            classification = data.get("classification") or {}
+            if classification.get("category") == category:
+                return data
+
+        return None
+    except Exception as exc:
+        log.warning("firestore_active_incident_lookup_failed", venue_id=venue_id, zone_id=zone_id, error=str(exc))
+        return None
+
+
+async def patch_incident_fields(incident_id: str, fields: dict[str, Any]) -> None:
+    """Merge-patch specific fields on an incident document."""
+    client = _client_or_none()
+    if client is None:
+        return
+    try:
+        await client.collection("incidents").document(incident_id).set(fields, merge=True)
+        log.info("firestore_incident_patched", incident_id=incident_id, fields=list(fields.keys()))
+    except Exception as exc:
+        log.warning("firestore_incident_patch_failed", incident_id=incident_id, error=str(exc))
+
+
 async def get_fcm_tokens_for_responder(responder_id: str) -> list[str]:
     """Return all active FCM tokens for a responder.
 

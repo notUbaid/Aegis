@@ -155,6 +155,8 @@ class Incident(BaseModel):
     resolved_at: datetime | None = None
     summary: str = ""
     agent_trace_id: str | None = None
+    s1_hitl_gated: bool = False
+    advisory_dispatch_plan: dict[str, object] | None = None
 
 
 class IncidentEvent(BaseModel):
@@ -193,6 +195,14 @@ class DispatchStatus(StrEnum):
     TIMED_OUT = "TIMED_OUT"
 
 
+class EscalationEntry(BaseModel):
+    """One rung of the backup paging ladder stored inside a Dispatch doc."""
+
+    responder_id: str
+    role: str
+    rationale: str = ""
+
+
 class Dispatch(BaseModel):
     dispatch_id: str = Field(default_factory=lambda: new_id("DSP"))
     venue_id: str
@@ -207,6 +217,7 @@ class Dispatch(BaseModel):
     handed_off_at: datetime | None = None
     required_skills: list[ResponderSkill] = Field(default_factory=list)
     notes: str = ""
+    escalation_chain: list[EscalationEntry] = Field(default_factory=list)
 
 
 class DispatchEvent(BaseModel):

@@ -1,6 +1,6 @@
 "use client";
 
-import { type Severity } from "@aegis/ui-web";
+import { type Severity, getAuthHeaders } from "@aegis/ui-web";
 
 const DISPATCH_BASE = process.env.NEXT_PUBLIC_DISPATCH_URL || "http://localhost:8004";
 const ORCH_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:8003";
@@ -21,6 +21,7 @@ export type DispatchAction = "ack" | "enroute" | "arrived" | "handoff" | "declin
 export async function callDispatch(dispatchId: string, action: DispatchAction): Promise<void> {
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches/${dispatchId}/${action}`, {
     method: "POST",
+    headers: await getAuthHeaders(),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
@@ -42,7 +43,7 @@ export interface PageRequest {
 export async function pageResponder(req: PageRequest): Promise<{ dispatch_id: string }> {
   const res = await fetch(`${DISPATCH_BASE}/v1/dispatches`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await getAuthHeaders()) },
     body: JSON.stringify({ ...req, fcm_tokens: [] }),
   });
   if (!res.ok) {

@@ -8,11 +8,9 @@ directly, mocking only the external SDK clients.
 from __future__ import annotations
 
 import json
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Shared mock factory
@@ -76,9 +74,11 @@ def _make_fs_client() -> MagicMock:
 def test_get_firestore_client_raises_when_no_client():
     from aegis_shared import firestore as fs
 
-    with patch.object(fs, "_client_or_none", return_value=None):
-        with pytest.raises(RuntimeError, match="Firestore client unavailable"):
-            fs.get_firestore_client()
+    with (
+        patch.object(fs, "_client_or_none", return_value=None),
+        pytest.raises(RuntimeError, match="Firestore client unavailable"),
+    ):
+        fs.get_firestore_client()
 
 
 def test_get_firestore_client_returns_mock():
@@ -174,9 +174,11 @@ async def test_update_incident_status_string():
 async def test_update_incident_status_invalid_raises():
     from aegis_shared import firestore as fs
 
-    with patch.object(fs, "_client_or_none", return_value=None):
-        with pytest.raises(ValueError, match="invalid incident status"):
-            await fs.update_incident_status("INC-1", "NOT_A_STATUS")
+    with (
+        patch.object(fs, "_client_or_none", return_value=None),
+        pytest.raises(ValueError, match="invalid incident status"),
+    ):
+        await fs.update_incident_status("INC-1", "NOT_A_STATUS")
 
 
 async def test_update_incident_status_no_client_is_noop():
@@ -523,13 +525,14 @@ async def test_verify_request_no_bearer_local_returns_anonymous():
 
 
 async def test_verify_request_no_bearer_enforced_raises_401():
+    from aegis_shared.auth import verify_request
     from fastapi import HTTPException
 
-    from aegis_shared.auth import verify_request
-
-    with patch("aegis_shared.auth._require_auth_enabled", return_value=True):
-        with pytest.raises(HTTPException) as exc_info:
-            await verify_request(authorization=None, x_firebase_appcheck=None)
+    with (
+        patch("aegis_shared.auth._require_auth_enabled", return_value=True),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await verify_request(authorization=None, x_firebase_appcheck=None)
     assert exc_info.value.status_code == 401
 
 
@@ -545,16 +548,15 @@ async def test_verify_request_bearer_extracted_invalid_local():
 
 
 async def test_verify_request_bearer_invalid_enforced_raises_401():
-    from fastapi import HTTPException
-
     from aegis_shared.auth import verify_request
+    from fastapi import HTTPException
 
     with (
         patch("aegis_shared.auth._require_auth_enabled", return_value=True),
         patch("aegis_shared.auth._verify_id_token", return_value=None),
+        pytest.raises(HTTPException) as exc_info,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await verify_request(authorization="Bearer bad-token", x_firebase_appcheck=None)
+        await verify_request(authorization="Bearer bad-token", x_firebase_appcheck=None)
     assert exc_info.value.status_code == 401
 
 
@@ -613,9 +615,8 @@ def test_require_role_correct_role_passes():
 
 
 async def test_require_role_wrong_role_raises_403():
-    from fastapi import HTTPException
-
     from aegis_shared.auth import Principal, require_role
+    from fastapi import HTTPException
 
     dep = require_role("admin")
     p = Principal(uid="u1", role="operator")
@@ -638,9 +639,8 @@ def test_topic_path_format():
 
 
 def test_publish_json_pydantic_model():
-    from pydantic import BaseModel
-
     from aegis_shared.pubsub import publish_json
+    from pydantic import BaseModel
 
     class Msg(BaseModel):
         value: str
@@ -678,10 +678,12 @@ def test_publish_json_raises_downstream_on_failure():
     mock_pub = MagicMock()
     mock_pub.publish.side_effect = Exception("connection refused")
 
-    with patch("aegis_shared.pubsub.get_publisher", return_value=mock_pub):
-        with patch("time.sleep"):  # suppress tenacity retry waits
-            with pytest.raises(DownstreamServiceError):
-                publish_json("bad-topic", {"x": 1})
+    with (
+        patch("aegis_shared.pubsub.get_publisher", return_value=mock_pub),
+        patch("time.sleep"),  # suppress tenacity retry waits
+        pytest.raises(DownstreamServiceError),
+    ):
+        publish_json("bad-topic", {"x": 1})
 
 
 def test_publish_json_ordering_key_attached():

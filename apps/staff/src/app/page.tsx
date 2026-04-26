@@ -3,6 +3,7 @@
 import * as React from "react";
 import {
   getDb,
+  useAuth,
   SEVERITY_COLOR,
   DISPATCH_STATUS_COLOR,
   type Dispatch,
@@ -12,6 +13,8 @@ import {
 import {
   collection,
   collectionGroup,
+  doc,
+  getDoc,
   onSnapshot,
   orderBy,
   query,
@@ -24,7 +27,6 @@ import { useUI } from "@/lib/ui";
 import { callDispatch } from "@/lib/actions";
 
 const DEFAULT_VENUE_ID = process.env.NEXT_PUBLIC_DEMO_VENUE_ID || "taj-ahmedabad";
-const ME_ID = process.env.NEXT_PUBLIC_RESPONDER_ID || "RSP-meera";
 
 const ACTIVE_DISPATCH = ["PAGED", "ACKNOWLEDGED", "EN_ROUTE", "ARRIVED"] as const;
 const SEV_RANK: Record<Severity, number> = { S1: 0, S2: 1, S3: 2, S4: 3 };
@@ -58,6 +60,8 @@ function toEpoch(v: unknown): number {
 type Tab = "home" | "history" | "profile";
 
 export default function StaffApp() {
+  const { user, loading: authLoading } = useAuth();
+  const [responderId, setResponderId] = React.useState<string | null>(null);
   const [incidents, setIncidents] = React.useState<Incident[]>([]);
   const [dispatches, setDispatches] = React.useState<Dispatch[]>([]);
   const [venueId, setVenueId] = React.useState<string>(DEFAULT_VENUE_ID);
@@ -65,13 +69,33 @@ export default function StaffApp() {
   const [error, setError] = React.useState<string | null>(null);
   const ui = useUI();
   const router = useRouter();
-  const me = responderById(ME_ID);
+
+  // ── Auth guard ──────────────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
+
+  // ── Fetch responder_id from /users/{uid} ───────────────────────────────
+  // This is the bridge: Firestore rules check /users/{uid}.responder_id == dispatch.responder_id
+  React.useEffect(() => {
+    if (!user) { setResponderId(null); return; }
+    const db = getDb();
+    getDoc(doc(db, "users", user.uid))
+      .then((snap) => {
+        const rid = snap.exists() ? (snap.data().responder_id as string | undefined) ?? null : null;
+        setResponderId(rid);
+      })
+      .catch(() => setResponderId(null));
+  }, [user]);
+
+  const me = responderById(responderId ?? "");
 
   React.useEffect(() => {
     if (!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) {
       setError("Firebase not configured. Set NEXT_PUBLIC_FIREBASE_* in apps/staff/.env.local.");
       return;
     }
+    if (!responderId) return; // wait until we know who this user is
     try {
       const db = getDb();
       const cs: QueryConstraint[] = [where("venue_id", "==", venueId), orderBy("detected_at", "desc")];
@@ -84,7 +108,7 @@ export default function StaffApp() {
       const dq = query(
         collectionGroup(db, "dispatches"),
         where("venue_id", "==", venueId),
-        where("responder_id", "==", ME_ID),
+        where("responder_id", "==", responderId),
         orderBy("paged_at", "desc"),
       );
       const unsubD = onSnapshot(
@@ -99,7 +123,7 @@ export default function StaffApp() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [venueId]);
+  }, [venueId, responderId]);
 
   const myActive = React.useMemo(
     () =>
@@ -122,11 +146,16 @@ export default function StaffApp() {
     : null;
   const pagedCount = myActive.filter((d) => d.status === "PAGED").length;
 
+  // ── Auth / profile loading screen ───────────────────────────────────────────
+  if (authLoading || !user) {
+    return <div style={{ minHeight: "100vh", background: "var(--c-bg-primary)" }} />;
+  }
+
   if (!me) {
     return (
       <main style={{ padding: 24, textAlign: "center" }}>
         <div style={{ fontFamily: "var(--font-mono)", color: "var(--c-ink-muted)", fontSize: 12 }}>
-          Responder {ME_ID} not on roster.
+          {responderId ? `Responder ${responderId} not on roster.` : "Loading profile…"}
         </div>
       </main>
     );

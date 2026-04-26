@@ -27,8 +27,10 @@ async function ensureUserProfile(uid: string, email: string | null) {
   const ref = doc(db, "users", uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
-    const responderId =
-      process.env.NEXT_PUBLIC_RESPONDER_ID ?? "RSP-unknown";
+    // NEXT_PUBLIC_RESPONDER_ID is set per-device deployment (e.g. via apphosting.yaml).
+    // If not set, we store null so the responder is effectively un-rostered until an admin
+    // assigns them a responder_id in Firestore — do NOT fall back to a hardcoded persona.
+    const responderId = process.env.NEXT_PUBLIC_RESPONDER_ID ?? null;
     await setDoc(ref, {
       uid,
       email: email ?? "",

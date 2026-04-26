@@ -21,6 +21,7 @@ import {
   type QueryConstraint,
 } from "firebase/firestore";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { VENUE, SEV_LABEL, zoneById, responderById } from "@/lib/venue";
 import { useUI } from "@/lib/ui";
 import {
@@ -33,6 +34,7 @@ import {
   type ServiceName,
   type DrillStep,
 } from "@/lib/actions";
+import { useAuth } from "@aegis/ui-web";
 
 const DEFAULT_VENUE_ID = process.env.NEXT_PUBLIC_DEMO_VENUE_ID || "taj-ahmedabad";
 
@@ -84,6 +86,7 @@ function toEpoch(v: unknown): number {
 }
 
 export default function ControlRoom() {
+  const { user, loading: authLoading } = useAuth();
   const [incidents, setIncidents] = React.useState<Incident[]>([]);
   const [dispatches, setDispatches] = React.useState<Dispatch[]>([]);
   const [venueId, setVenueId] = React.useState<string>(DEFAULT_VENUE_ID);
@@ -95,6 +98,12 @@ export default function ControlRoom() {
   const [health, setHealth] = React.useState<Record<ServiceName, boolean> | null>(null);
   const [drillOpen, setDrillOpen] = React.useState(false);
   const ui = useUI();
+
+  // ── Auth guard (redirect) ───────────────────────────────────────────────
+  const router = useRouter();
+  React.useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
 
   React.useEffect(() => {
     setNow(new Date());
@@ -199,6 +208,11 @@ export default function ControlRoom() {
     window.location.href = `/incident/${id}`;
   }
 
+  // ── Auth guard (blank screen while redirecting) ─────────────────────────
+  if (authLoading || !user) {
+    return <div style={{ minHeight: "100vh", background: "var(--c-bg-primary)" }} />;
+  }
+
   async function handleAction(action: "ack" | "escalate" | "dismiss", incident: Incident) {
     try {
       if (action === "escalate") {
@@ -253,6 +267,7 @@ export default function ControlRoom() {
         now={now}
         health={health}
         onDrill={() => setDrillOpen(true)}
+        userInitial={(user?.displayName ?? user?.email ?? "?")[0]?.toUpperCase() ?? "?"}
       />
       {drillOpen ? (
         <DrillModal
@@ -345,6 +360,7 @@ function TopBar({
   now,
   health,
   onDrill,
+  userInitial,
 }: {
   venueState: "Critical" | "Elevated" | "Nominal";
   criticalCount: number;
@@ -357,6 +373,7 @@ function TopBar({
   now: Date | null;
   health: Record<ServiceName, boolean> | null;
   onDrill: () => void;
+  userInitial: string;
 }) {
   const stateColor =
     venueState === "Critical" ? "#dc2626" : venueState === "Elevated" ? "#f59e0b" : "#10b981";
@@ -477,7 +494,7 @@ function TopBar({
           color: "var(--c-ink-secondary)",
         }}
       >
-        W
+        {userInitial}
       </div>
     </div>
   );
@@ -1090,125 +1107,10 @@ function ResponderBoard({
             );
           })
         )}
-      </div>
-    </div>
-  );
-}
-
-// ── Camera Panel (slide-in) ───────────────────────────────────────────────
-function CameraPanel({
-  onClose,
-  incidents,
-  openIncident,
-}: {
-  onClose: () => void;
-  incidents: Incident[];
-  openIncident: (id: string) => void;
-}) {
-  const ui = useUI();
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: 52,
-        right: 0,
-        bottom: 0,
-        width: 380,
-        background: "rgba(10,14,20,0.96)",
-        borderLeft: "1px solid var(--c-border)",
-        backdropFilter: "blur(20px)",
-        zIndex: 20,
-        display: "flex",
-        flexDirection: "column",
-        animation: "aegis-slide-in 0.2s ease-out both",
-      }}
-    >
-      <div
-        style={{
-          padding: "14px 18px",
-          borderBottom: "1px solid var(--c-border)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexShrink: 0,
-        }}
-      >
-        <div>
-          <Eyebrow style={{ marginBottom: 3 }}>Camera mosaic</Eyebrow>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>{VENUE.cameras.filter((c) => c.active).length} feeds active</div>
-        </div>
-        <button onClick={onClose} style={btnGhostStyle({ padding: "4px 8px", fontSize: 13 })}>
-          ✕
-        </button>
-      </div>
-      <div
-        className="scroll"
-        style={{
-          flex: 1,
-          padding: 12,
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 8,
-          alignContent: "start",
-          overflowY: "auto",
-        }}
-      >
-        {VENUE.cameras.map((cam) => {
-          const zone = zoneById(cam.zone_id);
-          const hasIncident = incidents.filter(isActive).find((inc) => inc.zone_id === cam.zone_id);
-          const sev = hasIncident ? sevOf(hasIncident) : null;
-          const color = sev ? SEVERITY_COLOR[sev] : "#1e293b";
-          return (
-            <div
-              key={cam.camera_id}
-              onClick={() =>
-                hasIncident
-                  ? openIncident(hasIncident.incident_id)
-                  : ui.toast(`No active incident in ${zone.name}`, { tone: "info" })
-              }
-              className="hover-row"
-              style={{
-                aspectRatio: "16/10",
-                borderRadius: 10,
-                background: hasIncident
-                  ? `linear-gradient(180deg, rgba(10,14,20,0.2), rgba(10,14,20,0.9)), linear-gradient(135deg, ${color}22, #0a0e1499)`
-                  : "rgba(18,24,33,0.8)",
-                border: `1px solid ${color}55`,
-                padding: "8px 10px",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-                cursor: "pointer",
-                position: "relative",
-                overflow: "hidden",
-              }}
-            >
-              {hasIncident ? (
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 6,
-                    right: 6,
-                    background: color,
-                    borderRadius: 999,
-                    width: 6,
-                    height: 6,
-                    animation: "aegis-dot-pulse 1.4s infinite",
-                  }}
-                />
-              ) : null}
-              <Eyebrow style={{ fontSize: 9 }}>{cam.camera_id.toUpperCase()}</Eyebrow>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 2 }}>{zone.name}</div>
-                {hasIncident && sev ? <SevBadge sev={sev} /> : <span style={{ fontSize: 10, color: "var(--c-ink-muted)" }}>Nominal</span>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+       </div>
+     </div>
+   );
+ }
 
 // ── History Tab ───────────────────────────────────────────────────────────
 function HistoryTab({ incidents }: { incidents: Incident[] }) {

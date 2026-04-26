@@ -1,12 +1,6 @@
 "use client";
 
-import { getDb, getFirebaseAuth, type Incident, type IncidentStatus, type Severity } from "@aegis/ui-web";
-import {
-  collection,
-  doc,
-  setDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+import { type Severity } from "@aegis/ui-web";
 
 const DISPATCH_BASE = process.env.NEXT_PUBLIC_DISPATCH_URL || "http://localhost:8004";
 const ORCH_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:8003";
@@ -20,111 +14,6 @@ const SERVICE_BASES = {
   dispatch: DISPATCH_BASE,
 } as const;
 export type ServiceName = keyof typeof SERVICE_BASES;
-
-/**
- * Returns the signed-in user's Firebase UID.
- * For the staff app this uid is what Firestore rules check against
- * (bridged to responder_id via /users/{uid}.responder_id).
- */
-function getActorUid(): string {
-  const uid = getFirebaseAuth().currentUser?.uid;
-  if (!uid) throw new Error("Not authenticated — please sign in.");
-  return uid;
-}
-
-// ── Firestore helpers ─────────────────────────────────────────────────────
-async function appendIncidentEvent(
-  incidentId: string,
-  venueId: string,
-  toStatus: IncidentStatus,
-  fromStatus: IncidentStatus | null,
-  actorId: string,
-  payload: Record<string, unknown> = {},
-) {
-  const db = getDb();
-  const eventsCol = collection(db, "incidents", incidentId, "events");
-  const eventId = `op-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  await setDoc(doc(eventsCol, eventId), {
-    event_id: eventId,
-    event_time: new Date().toISOString(),
-    venue_id: venueId,
-    incident_id: incidentId,
-    from_status: fromStatus,
-    to_status: toStatus,
-    actor_type: "operator",
-    actor_id: actorId,
-    payload,
-    created_at: serverTimestamp(),
-  });
-}
-
-async function patchIncidentStatus(
-  incident: Incident,
-  next: IncidentStatus,
-  actorId: string,
-  payload: Record<string, unknown> = {},
-) {
-  const db = getDb();
-  const update: Partial<Incident> & { resolved_at?: string } = { status: next };
-  if (next === "CLOSED" || next === "DISMISSED") {
-    update.resolved_at = new Date().toISOString();
-  }
-  await setDoc(doc(db, "incidents", incident.incident_id), update, { merge: true });
-  await appendIncidentEvent(
-    incident.incident_id,
-    incident.venue_id,
-    next,
-    incident.status,
-    actorId,
-    payload,
-  );
-}
-
-// ── Incident state mutations ──────────────────────────────────────────────
-export async function acknowledgeIncident(incident: Incident) {
-  const actor = getActorUid();
-  await patchIncidentStatus(incident, "ACKNOWLEDGED", actor);
-}
-
-export async function dismissIncident(incident: Incident) {
-  const actor = getActorUid();
-  await patchIncidentStatus(incident, "DISMISSED", actor, { reason: "false_positive" });
-}
-
-export async function resolveIncident(incident: Incident) {
-  const actor = getActorUid();
-  await patchIncidentStatus(incident, "CLOSED", actor);
-}
-
-export async function escalateIncident(
-  incident: Incident,
-  authorities: string[],
-) {
-  const actor = getActorUid();
-  await patchIncidentStatus(incident, "DISPATCHED", actor, {
-    escalated: true,
-    authorities,
-    sendai_packet: true,
-  });
-}
-
-export async function addOperatorNote(incidentId: string, venueId: string, text: string) {
-  const actor = getActorUid();
-  const db = getDb();
-  const eventsCol = collection(db, "incidents", incidentId, "events");
-  const eventId = `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  await setDoc(doc(eventsCol, eventId), {
-    event_id: eventId,
-    event_time: new Date().toISOString(),
-    venue_id: venueId,
-    incident_id: incidentId,
-    to_status: "NOTE",
-    actor_type: "operator",
-    actor_id: actor,
-    payload: { note: text },
-    created_at: serverTimestamp(),
-  });
-}
 
 // ── Dispatch API calls ────────────────────────────────────────────────────
 export type DispatchAction = "ack" | "enroute" | "arrived" | "handoff" | "decline";
@@ -214,7 +103,7 @@ export async function runDrill(
   const blob = new Blob([new Uint8Array(frame)], { type: "image/jpeg" });
   const form = new FormData();
   form.append("venue_id", venueId);
-  form.append("camera_id", "demo-cam");
+  form.append("camera_id", process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam");
   form.append("zone_id", zoneId);
   form.append("frame", blob, "demo.jpg");
   const ingest = await fetch(`${INGEST_BASE}/v1/frames`, { method: "POST", body: form });
@@ -232,7 +121,7 @@ export async function runDrill(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       venue_id: venueId,
-      camera_id: "demo-cam",
+      camera_id: process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam",
       zone_id: zoneId,
       frame_base64: b64,
       publish: false,

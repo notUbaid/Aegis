@@ -242,7 +242,7 @@ export async function runDrill(
   const blob = new Blob([new Uint8Array(frame)], { type: "image/jpeg" });
   const form = new FormData();
   form.append("venue_id", venueId);
-  form.append("camera_id", "demo-cam");
+  form.append("camera_id", process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam");
   form.append("zone_id", zoneId);
   form.append("frame", blob, "demo.jpg");
   const ingest = await fetch(`${INGEST_BASE}/v1/frames`, { method: "POST", body: form });
@@ -260,7 +260,7 @@ export async function runDrill(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       venue_id: venueId,
-      camera_id: "demo-cam",
+      camera_id: process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam",
       zone_id: zoneId,
       frame_base64: b64,
       publish: false,

@@ -2,9 +2,10 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   getDb,
+  useAuth,
   SEVERITY_COLOR,
   STATUS_COLOR,
   DISPATCH_STATUS_COLOR,
@@ -92,6 +93,8 @@ export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? "";
   const ui = useUI();
+  const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
 
   const [incident, setIncident] = React.useState<Incident | null>(null);
   const [dispatches, setDispatches] = React.useState<Dispatch[]>([]);
@@ -99,6 +102,11 @@ export default function IncidentDetailPage() {
   const [now, setNow] = React.useState<Date | null>(null);
   const [acting, setActing] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
+
+  // ── Auth guard ──────────────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
 
   React.useEffect(() => {
     setNow(new Date());
@@ -126,6 +134,11 @@ export default function IncidentDetailPage() {
       unsubE();
     };
   }, [id]);
+
+  // ── Auth / loading guard ───────────────────────────────────────────────
+  if (authLoading || !user) {
+    return <div style={{ minHeight: "100vh", background: "var(--c-bg-primary)" }} />;
+  }
 
   if (!incident) {
     return (
@@ -204,21 +217,22 @@ export default function IncidentDetailPage() {
     }
   }
 
-  async function handleResolve() {
-    if (!incident) return;
-    const ok = await ui.confirm({
-      title: "Mark as resolved?",
-      message: "Closes the incident. Sendai report can be generated next.",
-      tone: "info",
-      confirmLabel: "Resolve",
-    });
-    if (!ok) return;
-    try {
-      await resolveIncident(incident);
-      ui.toast("Incident closed", { tone: "success" });
-    } catch (err) {
-      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
-    }
+   async function handleResolve() {
+     if (!incident) return;
+     const ok = await ui.confirm({
+       title: "Mark as resolved?",
+       message: "Close this incident. The audit log preserves all evidence.",
+       tone: "info",
+       confirmLabel: "Resolve",
+     });
+     if (!ok) return;
+     try {
+       await resolveIncident(incident);
+       ui.toast("Incident resolved", { tone: "info" });
+     } catch (err) {
+       ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+     }
+   }
   }
 
   async function handleAcknowledge() {
@@ -247,17 +261,10 @@ export default function IncidentDetailPage() {
       ui.toast(`${responderId} paged · ${r.dispatch_id}`, { tone: "success", title: "Responder assigned" });
     } catch (err) {
       ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
-    }
-  }
+     }
+   }
 
-  function handleExport() {
-    ui.toast("Sendai-format JSON-LD packet generated · ready for authorities", {
-      tone: "success",
-      title: "Authority packet ready",
-    });
-  }
-
-  return (
+   return (
     <>
       <div
         style={{
@@ -305,13 +312,10 @@ export default function IncidentDetailPage() {
         </button>
         <SevBadge sev={sev} />
         <div style={{ flex: 1 }} />
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--c-ink-muted)" }}>
-          {now ? now.toLocaleTimeString("en-GB") : "--:--:--"}
-        </span>
-        <button onClick={handleExport} style={btnGhostStyle()}>
-          Export packet
-        </button>
-      </div>
+         <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--c-ink-muted)" }}>
+           {now ? now.toLocaleTimeString("en-GB") : "--:--:--"}
+         </span>
+       </div>
 
       <div style={{ maxWidth: 1320, margin: "0 auto", padding: "24px 24px 60px" }}>
         <div style={{ marginBottom: 18 }}>

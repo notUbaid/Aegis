@@ -4,18 +4,17 @@ import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   getDb,
+  useAuth,
   SEVERITY_COLOR,
   DISPATCH_STATUS_COLOR,
   type Dispatch,
   type Incident,
   type Severity,
 } from "@aegis/ui-web";
-import { collection, doc, onSnapshot, orderBy, query } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot, orderBy, query } from "firebase/firestore";
 import { zoneById, SEV_LABEL } from "@/lib/venue";
 import { useUI } from "@/lib/ui";
 import { callDispatch, type DispatchAction } from "@/lib/actions";
-
-const ME_ID = process.env.NEXT_PUBLIC_RESPONDER_ID || "RSP-meera";
 
 function elapsed(value: unknown): string {
   const ms = Math.max(0, Date.now() - toEpoch(value));
@@ -45,10 +44,29 @@ export default function StaffIncidentPage() {
   const id = params?.id ?? "";
   const router = useRouter();
   const ui = useUI();
+  const { user, loading: authLoading } = useAuth();
+  const [responderId, setResponderId] = React.useState<string | null>(null);
 
   const [incident, setIncident] = React.useState<Incident | null>(null);
   const [dispatches, setDispatches] = React.useState<Dispatch[]>([]);
   const [acting, setActing] = React.useState(false);
+
+  // ── Auth guard ──────────────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [user, authLoading, router]);
+
+  // ── Fetch responder_id from /users/{uid} ───────────────────────────────
+  React.useEffect(() => {
+    if (!user) { setResponderId(null); return; }
+    const db = getDb();
+    getDoc(doc(db, "users", user.uid))
+      .then((snap) => {
+        const rid = snap.exists() ? (snap.data().responder_id as string | undefined) ?? null : null;
+        setResponderId(rid);
+      })
+      .catch(() => setResponderId(null));
+  }, [user]);
 
   React.useEffect(() => {
     if (!id || !process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) return;
@@ -66,7 +84,7 @@ export default function StaffIncidentPage() {
     };
   }, [id]);
 
-  const myDispatch = dispatches.find((d) => d.responder_id === ME_ID);
+  const myDispatch = dispatches.find((d) => d.responder_id === (responderId ?? ""));
   const sev: Severity = incident?.classification?.severity ?? "S4";
   const color = SEVERITY_COLOR[sev];
   const closed = incident && ["CLOSED", "DISMISSED"].includes(incident.status);
@@ -86,6 +104,11 @@ export default function StaffIncidentPage() {
     } finally {
       setActing(false);
     }
+  }
+
+  // ── Auth loading screen (all hooks above, early return safe here) ──────────
+  if (authLoading || !user) {
+    return <div style={{ minHeight: "100vh", background: "var(--c-bg-primary)" }} />;
   }
 
   if (!incident || !zone) {

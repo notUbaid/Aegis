@@ -1,7 +1,7 @@
 [project]
 name = "aegis-agents"
 version = "0.1.0"
-description = "Aegis agent suite (classifier, cascade, dispatcher, orchestrator, ...)"
+description = "Aegis agent suite (classifier, dispatcher, orchestrator, ...)"
 requires-python = ">=3.12"
 dependencies = [
     "aegis-shared",
@@ -20,14 +20,13 @@ build-backend = "setuptools.build_meta"
 # ``./<name>/__init__.py`` and is listed explicitly so setuptools installs them
 # as ``agents.<name>`` rather than accidentally top-level.
 [tool.setuptools]
-packages = [
+  packages = [
     "agents",
-    "agents.cascade",
     "agents.classifier",
     "agents.dispatcher",
     "agents.orchestrator",
-]
-package-dir = { "agents" = "." }
+  ]
+  package-dir = { "agents" = "." }
 
 [tool.uv.sources]
 aegis-shared = { path = "../services/shared", editable = true }

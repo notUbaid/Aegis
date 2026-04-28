@@ -1,65 +1,95 @@
 # Contributing to Aegis
 
-Short and strict because we have nine weeks.
+Thank you for your interest in contributing to Aegis! This document provides guidelines and information for contributors.
 
-## Branching
+## Getting Started
 
-- `main` is always green and deployable
-- Feature branches: `feat/<area>/<short-desc>` e.g. `feat/orchestrator/cascade-predictor`
+1. Fork the repository
+2. Clone your fork: `git clone https://github.com/<your-username>/Aegis.git`
+3. Create a branch for your changes
+4. Make your changes and ensure tests pass
+5. Submit a pull request
+
+## Branching Strategy
+
+- `main` — production-ready code, always deployable
+- Feature branches: `feat/<area>/<short-desc>` (e.g., `feat/dashboard/camera-widget`)
 - Bug fixes: `fix/<area>/<short-desc>`
-- Chores: `chore/<short-desc>`
+- Chores: `chore/<short-desc>` (dependencies, tooling, etc.)
 
-## Before you push
+## Development Workflow
+
+### Before Committing
+
+Ensure code quality and test coverage:
 
 ```bash
 make lint
 make test
 ```
 
-Both must pass. If a test is flaky, mark it `@pytest.mark.flaky` and open an
-issue — don't commit with a flake.
+All linters and tests must pass before pushing. If a test is flaky, mark it appropriately and file an issue — do not commit with known flakes.
 
-## Pull requests
+### Pull Requests
 
-- One PR = one logical change. No drive-by refactors in a feature PR.
+- One PR per logical change. Keep commits focused.
 - Title format: `<area>: <short description>`
-- Description must include: what changed, why, how you tested it
-- At least one teammate review before merge
-- CI must be green — no exceptions
+- Description should include:
+  - What changed
+  - Why the change was needed
+  - How it was tested
+- At least one team member review required
+- CI must pass with no errors
 
-## Architectural decisions
+### Commit Messages
 
-If your change touches how services talk to each other, add an ADR under
-`docs/decisions/` (copy the format of 0001). This is where we document
-"why did we do it this way" for the judges and for us in 3 months.
-
-## Secrets
-
-Never commit anything in `.secrets/`, `.env`, or any file named
-`service-account-*.json`. If you accidentally do, notify the team
-immediately and rotate the credential.
-
-## Code style
-
-- Python: ruff (config in root `pyproject.toml`), strict mypy
-- TypeScript: ESLint + Prettier, strict TS
-- Dart: `dart analyze` + `dart format`
-- SQL: sqlfluff
-
-Auto-format on save is configured in `.vscode/settings.json` — use it.
-
-## Commits
-
-Conventional-commit style preferred but not enforced:
+Follow conventional commit format:
 
 ```
-feat(orchestrator): add cascade predictor Phase 2 scaffold
-fix(ingest): reject frames larger than 5MB
-docs(architecture): update agent diagram
+feat(dashboard): add real-time camera streaming
+fix(api): handle null values in response parser
+docs: update installation instructions
 ```
 
-## Demo discipline
+## Code Quality
 
-Never break `scripts/smoke.sh`. It's our "the project still works end-to-end"
-check. If your PR breaks it, either fix it in the same PR or explicitly skip
-the affected step with a comment explaining why and a linked issue.
+### Python
+- Formatter: [ruff](https://github.com/astral-sh/ruff) (configured in `pyproject.toml`)
+- Type checking: strict mypy
+
+### TypeScript / JavaScript
+- Linting: ESLint + Prettier
+- TypeScript strict mode enabled
+
+### Dart
+- `dart analyze`
+- `dart format`
+
+### SQL
+- [sqlfluff](https://github.com/sqlfluff/sqlfluff) for linting and formatting
+
+Auto-format on save is configured in `.vscode/settings.json` for supported editors.
+
+## Architectural Decisions
+
+Significant architectural or design decisions are documented using [ADR](https://adr.github.io/) (Architectural Decision Records). New ADRs live in `docs/decisions/` following the established format.
+
+## Security
+
+**Never commit**:
+- `.secrets/` directory
+- `.env` files containing secrets
+- Service account credentials (`service-account-*.json`)
+- API keys, tokens, or passwords
+
+If you accidentally commit sensitive data, notify the team immediately and rotate the credential.
+
+## Testing
+
+- Write tests for new features and bug fixes
+- Run `scripts/smoke.sh` to verify end-to-end functionality
+- Do not break the smoke test — if your PR breaks it, fix it in the same PR or document why it's skipped with a linked issue
+
+## Questions?
+
+Open an issue for any questions about contributing to this project.

@@ -165,7 +165,13 @@ async def _classify_with_gemini(
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "vision"}
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "service": "vision",
+        "model": settings.gemini_flash_model,
+        "gemini": "available" if settings.google_api_key else "unavailable",
+    }
 
 
 @app.post("/v1/analyze", response_model=AnalyzeResponse)

@@ -480,6 +480,105 @@ async def decline(dispatch_id: str, _: _Authed) -> DispatchState:
     return state
 
 
+class DispatchStatusUpdate(BaseModel):
+    status: str  # CLOSED, DISMISSED, DISPATCHED
+    actor_id: str | None = None
+    escalated: bool = False
+    authorities: list[str] = []
+    sendai_packet: bool = False
+    reason: str = ""
+
+
+@app.patch("/v1/dispatches/{dispatch_id}/status", response_model=DispatchState)
+async def update_dispatch_status(
+    dispatch_id: str,
+    update: DispatchStatusUpdate,
+    _: _Authed,
+) -> DispatchState:
+    """Update dispatch/incident status for dismiss, resolve, escalate operations.
+
+    This endpoint handles incident-level status transitions that are triggered
+    via the dispatch service:
+    - DISMISSED: Mark incident as dismissed (dispatch stays as-is)
+    - CLOSED: Mark incident as closed (dispatch stays as-is)
+    - DISPATCHED: Mark incident as dispatched (used for escalation)
+    """
+    entry = app.state.memory_store.get(dispatch_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="dispatch not found")
+
+    incident_id = entry.get("incident_id") or dispatch_id
+    actor_id = update.actor_id or "system"
+
+    if update.status == "DISMISSED":
+        await update_incident_status(incident_id, IncidentStatus.DISMISSED.value)
+        await write_audit(
+            venue_id=entry.get("venue_id", "unknown"),
+            incident_id=incident_id,
+            action="incident.dismissed",
+            actor_type="human",
+            actor_id=actor_id,
+            output_obj={"dispatch_id": dispatch_id, "reason": update.reason},
+            explanation=f"Incident {incident_id} dismissed: {update.reason}",
+        )
+        log.info("incident_dismissed", incident_id=incident_id, reason=update.reason)
+
+    elif update.status == "CLOSED":
+        await update_incident_status(incident_id, IncidentStatus.CLOSED.value)
+        await write_audit(
+            venue_id=entry.get("venue_id", "unknown"),
+            incident_id=incident_id,
+            action="incident.closed",
+            actor_type="human",
+            actor_id=actor_id,
+            output_obj={"dispatch_id": dispatch_id},
+            explanation=f"Incident {incident_id} closed",
+        )
+        log.info("incident_closed", incident_id=incident_id)
+
+    elif update.status == "DISPATCHED":
+        await update_incident_status(incident_id, IncidentStatus.DISPATCHED.value)
+        # Also ensure dispatch is at least PAGED if not already
+        if entry["status"] in (None, ""):
+            await _record(dispatch_id, DispatchStatus.PAGED)
+        audit_action = "incident.dispatched"
+        if update.escalated:
+            audit_action = "incident.escalated"
+        await write_audit(
+            venue_id=entry.get("venue_id", "unknown"),
+            incident_id=incident_id,
+            action=audit_action,
+            actor_type="human",
+            actor_id=actor_id,
+            output_obj={
+                "dispatch_id": dispatch_id,
+                "escalated": update.escalated,
+                "authorities": update.authorities,
+            },
+            explanation=(
+                f"Incident {incident_id} {'escalated' if update.escalated else 'dispatched'}"
+            ),
+        )
+        log.info("incident_dispatched", incident_id=incident_id, escalated=update.escalated)
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown status '{update.status}'; expected DISMISSED, CLOSED, or DISPATCHED",
+        )
+
+    # Return current dispatch state
+    current = app.state.memory_store.get(dispatch_id, {})
+    return DispatchState(
+        dispatch_id=dispatch_id,
+        incident_id=current.get("incident_id"),
+        venue_id=current.get("venue_id"),
+        responder_id=current.get("responder_id"),
+        status=current["status"],
+        last_updated_at=current["last_updated_at"],
+    )
+
+
 @app.get("/v1/dispatches/{dispatch_id}", response_model=DispatchState)
 async def get_dispatch(dispatch_id: str, _: _Authed) -> DispatchState:
     entry = app.state.memory_store.get(dispatch_id)

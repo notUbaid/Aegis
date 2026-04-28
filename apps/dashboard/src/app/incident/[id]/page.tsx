@@ -1003,11 +1003,26 @@ function Timeline({ events, dispatches }: { events: IncidentEvent[]; dispatches:
 function EvidenceFrame({ zoneName, cameraId, severity }: { zoneName: string; cameraId: string; severity: Severity }) {
   const color = SEVERITY_COLOR[severity];
   const [now, setNow] = React.useState<string>("00:00:00");
+  const [frameSrc, setFrameSrc] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
   React.useEffect(() => {
     setNow(new Date().toLocaleTimeString("en-GB"));
     const t = setInterval(() => setNow(new Date().toLocaleTimeString("en-GB")), 1000);
     return () => clearInterval(t);
   }, []);
+
+  React.useEffect(() => {
+    fetch("/demo-frame.jpg")
+      .then((res) => res.blob())
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        setFrameSrc(url);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
   return (
     <div
       style={{
@@ -1015,19 +1030,44 @@ function EvidenceFrame({ zoneName, cameraId, severity }: { zoneName: string; cam
         aspectRatio: "16/9",
         borderRadius: 14,
         overflow: "hidden",
-        background: `linear-gradient(180deg, rgba(10,14,20,0.3) 0%, rgba(10,14,20,0.95) 100%), radial-gradient(ellipse at center, ${color}33 0%, transparent 60%), linear-gradient(135deg, #0f1722 0%, #1a2230 100%)`,
+        background: frameSrc ? "transparent" : `linear-gradient(180deg, rgba(10,14,20,0.3) 0%, rgba(10,14,20,0.95) 100%), radial-gradient(ellipse at center, ${color}33 0%, transparent 60%), linear-gradient(135deg, #0f1722 0%, #1a2230 100%)`,
         border: `1px solid ${color}55`,
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          backgroundImage:
-            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.015) 2px, rgba(255,255,255,0.015) 3px)",
-          pointerEvents: "none",
-        }}
-      />
+      {frameSrc && (
+        <img
+          src={frameSrc}
+          alt="Evidence frame"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+        />
+      )}
+      {!frameSrc && !loading && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.015) 2px, rgba(255,255,255,0.015) 3px)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      {frameSrc && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "linear-gradient(90deg, rgba(220,38,38,0.15) 0%, transparent 15%, transparent 85%, rgba(220,38,38,0.1) 100%)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
       <div
         style={{
           position: "absolute",
@@ -1040,22 +1080,24 @@ function EvidenceFrame({ zoneName, cameraId, severity }: { zoneName: string; cam
           boxShadow: `0 0 18px ${color}66`,
         }}
       >
-        <div
-          style={{
-            position: "absolute",
-            top: -22,
-            left: -2,
-            fontFamily: "var(--font-mono)",
-            fontSize: 10,
-            padding: "2px 8px",
-            background: color,
-            color: "#0a0e14",
-            borderRadius: 4,
-            fontWeight: 600,
-          }}
-        >
-          {severity} · 92%
-        </div>
+        {!frameSrc && (
+          <div
+            style={{
+              position: "absolute",
+              top: -22,
+              left: -2,
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              padding: "2px 8px",
+              background: color,
+              color: "#0a0e14",
+              borderRadius: 4,
+              fontWeight: 600,
+            }}
+          >
+            {severity} · 92%
+          </div>
+        )}
       </div>
       <div
         style={{

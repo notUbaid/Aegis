@@ -501,24 +501,32 @@ export async function runDrill(
   venueId: string,
   zoneId: string,
   onStep: (i: number, patch: Partial<DrillStep>) => void,
+  useRealPipeline = false,
 ): Promise<{ ok: boolean }> {
+  const usePubsub = useRealPipeline;
+
   // Step 1: ingest
   onStep(0, { status: "running" });
   const frame = await loadDemoFrame();
   const blob = new Blob([new Uint8Array(frame)], { type: "image/jpeg" });
-  const form = new FormData();
-  form.append("venue_id", venueId);
-  form.append("camera_id", process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam");
-  form.append("zone_id", zoneId);
-  form.append("frame", blob, "demo.jpg");
-  const ingest = await fetch(`${INGEST_BASE}/v1/frames`, { method: "POST", body: form });
-  if (!ingest.ok) {
-    onStep(0, { status: "error", detail: `ingest ${ingest.status}` });
-    return { ok: false };
-  }
-  onStep(0, { status: "ok", detail: "frame accepted" });
 
-  // Step 2: vision
+  if (usePubsub) {
+    const form = new FormData();
+    form.append("venue_id", venueId);
+    form.append("camera_id", process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam");
+    form.append("zone_id", zoneId);
+    form.append("frame", blob, "demo.jpg");
+    const ingest = await fetch(`${INGEST_BASE}/v1/frames`, { method: "POST", body: form });
+    if (!ingest.ok) {
+      onStep(0, { status: "error", detail: `ingest ${ingest.status}` });
+      return { ok: false };
+    }
+    onStep(0, { status: "ok", detail: "frame → Pub/Sub (async)" });
+  } else {
+    onStep(0, { status: "ok", detail: "frame loaded (sync demo)" });
+  }
+
+  // Step 2: vision (either directly or via Pub/Sub trigger)
   onStep(1, { status: "running" });
   const b64 = await blobToBase64(blob);
   const visRes = await fetch(`${VISION_BASE}/v1/analyze`, {
@@ -529,7 +537,7 @@ export async function runDrill(
       camera_id: process.env.NEXT_PUBLIC_DEMO_CAMERA_ID ?? "demo-cam",
       zone_id: zoneId,
       frame_base64: b64,
-      publish: false,
+      publish: usePubsub,
     }),
   });
   if (!visRes.ok) {
@@ -553,7 +561,7 @@ export async function runDrill(
       venue_id: venueId,
       zone_id: zoneId,
       signals: [vis.signal],
-      drill_mode: true,
+      drill_mode: !usePubsub,
     }),
   });
   if (!orchRes.ok) {

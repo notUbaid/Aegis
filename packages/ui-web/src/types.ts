@@ -65,6 +65,7 @@ export interface Incident {
   agent_trace_id?: string | null;
   s1_hitl_gated?: boolean;
   advisory_dispatch_plan?: Record<string, unknown> | null;
+  audit_hash?: string | null;
 }
 
 export interface Dispatch {

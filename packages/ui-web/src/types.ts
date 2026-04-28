@@ -27,7 +27,8 @@ export type IncidentStatus =
   | "VERIFIED"
   | "CLOSED"
   | "DISMISSED"
-  | "NOTE";
+  | "NOTE"
+  | "OPEN";
 
 export type DispatchStatus =
   | "PAGED"
@@ -117,6 +118,7 @@ export const STATUS_COLOR: Record<IncidentStatus, string> = {
   CLOSED: "#64748B",
   DISMISSED: "#64748B",
   NOTE: "#8B5CF6",
+  OPEN: "#F59E0B",
 };
 
 export const DISPATCH_STATUS_COLOR: Record<DispatchStatus, string> = {

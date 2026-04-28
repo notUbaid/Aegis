@@ -260,7 +260,7 @@ Open the **Staff PWA** (`https://aegis-staff--<project>.hosted.app`) and log in 
 
 ## Success metric
 
-**Dispatch Latency (DL)** — from first perceptual signal to responder en-route with correct brief.
+**Dispatch Latency (DL)** — from first perceptual signal to responder en-route with correct brief..
 
 ```
 Industry baseline (Indian hotel incidents, 2018–2024 case studies)   12–18 min

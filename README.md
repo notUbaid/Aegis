@@ -295,7 +295,7 @@ Detailed target-level mapping in the [Master Build Blueprint](./AEGIS_Master_Bui
 <p align="center">
   <table>
     <tr>
-      <td align="center" width="50%">
+      <td align="center" width="25%">
         <div>
           <img src="https://avatars.githubusercontent.com/Sam-bot-dev?s=120" width="120px;" height="120px;" alt="Bhavesh"/>
         </div>
@@ -303,13 +303,29 @@ Detailed target-level mapping in the [Master Build Blueprint](./AEGIS_Master_Bui
         <div><strong>Bhavesh</strong></div>
         <a href="https://github.com/Sam-bot-dev">🌐 GitHub</a>
       </td>
-      <td align="center" width="50%">
+      <td align="center" width="25%">
         <div>
           <img src="https://avatars.githubusercontent.com/notUbaid?s=120" width="120px;" height="120px;" alt="Ubaid khan"/>
         </div>
         <div><strong>Head Teammate</strong></div>
         <div><strong>Ubaid khan</strong></div>
         <a href="https://github.com/notUbaid">🌐 GitHub</a>
+      </td>
+      <td align="center" width="25%">
+        <div>
+          <img src="https://avatars.githubusercontent.com/Destroyerved?s=120" width="120px;" height="120px;" alt="Rohan"/>
+        </div>
+        <div><strong>Architecture Designer</strong></div>
+        <div><strong>Ved</strong></div>
+        <a href="https://github.com/Destroyerved">🌐 GitHub</a>
+      </td>
+      <td align="center" width="25%">
+        <div>
+          <img src="https://avatars.githubusercontent.com/harsheellhu?s=120" width="120px;" height="120px;" alt="Yug"/>
+        </div>
+        <div><strong>🗄️ Database Head</strong></div>
+        <div><strong>Harshil</strong></div>
+        <a href="https://github.com/harsheellhu">🌐 GitHub</a>
       </td>
     </tr>
   </table>

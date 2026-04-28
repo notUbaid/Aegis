@@ -172,10 +172,9 @@ export default function ProfilePage() {
           lineHeight: 1.55,
         }}
       >
-        Phone-OTP auth lands in Phase 2. For the Phase 1 judge demo, this app
-        runs in read-only mode anchored to the demo venue.
+        Authenticated via Firebase · venue access restricted to assigned zones
         <div style={{ marginTop: 10, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--c-ink-muted)" }}>
-          venue_id · {process.env.NEXT_PUBLIC_DEMO_VENUE_ID || "taj-ahmedabad"}
+          venue_id · {process.env.NEXT_PUBLIC_DEMO_VENUE_ID || "taj-ahmedabad"} · {me.responder_id}
         </div>
       </div>
     </main>

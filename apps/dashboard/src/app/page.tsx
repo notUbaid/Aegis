@@ -33,6 +33,8 @@ import {
   SERVICE_PORTS,
   type ServiceName,
   type DrillStep,
+  seedDemoIncidents,
+  checkDemoSeedingNeeded,
 } from "@/lib/actions";
 import { useAuth, doSignOut } from "@aegis/ui-web";
 
@@ -1329,6 +1331,28 @@ function HistoryTab({ incidents }: { incidents: Incident[] }) {
 
 // ── Setup Tab ─────────────────────────────────────────────────────────────
 function SetupTab() {
+  const ui = useUI();
+  const venueId = DEFAULT_VENUE_ID;
+  const [seeding, setSeeding] = React.useState(false);
+  const [seedNeeded, setSeedNeeded] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    checkDemoSeedingNeeded(venueId).then(setSeedNeeded);
+  }, [venueId]);
+
+  async function handleSeed() {
+    setSeeding(true);
+    try {
+      const { seeded } = await seedDemoIncidents(venueId);
+      ui.toast(`Seeded ${seeded} demo incidents`, { tone: "success" });
+      setSeedNeeded(false);
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), { tone: "danger" });
+    } finally {
+      setSeeding(false);
+    }
+  }
+
   return (
     <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 16 }}>
       <div className="glass" style={glassStyle({ padding: 20 })}>
@@ -1385,91 +1409,125 @@ function SetupTab() {
         </div>
       </div>
 
-      <div className="glass" style={glassStyle({ padding: 20 })}>
-        <Eyebrow>Roster ({VENUE.responders.length})</Eyebrow>
-        <h3 style={{ fontSize: 18, fontWeight: 600, marginTop: 6, marginBottom: 14 }}>On-shift responders</h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {VENUE.responders.map((r) => {
-            const initials = r.display_name.split(" ").map((s) => s[0]).join("").slice(0, 2);
-            return (
-              <div
-                key={r.responder_id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 12px",
-                  background: "rgba(255,255,255,0.02)",
-                  borderRadius: 10,
-                }}
-              >
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="glass" style={glassStyle({ padding: 20 })}>
+          <Eyebrow>Roster ({VENUE.responders.length})</Eyebrow>
+          <h3 style={{ fontSize: 18, fontWeight: 600, marginTop: 6, marginBottom: 14 }}>On-shift responders</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {VENUE.responders.map((r) => {
+              const initials = r.display_name.split(" ").map((s) => s[0]).join("").slice(0, 2);
+              return (
                 <div
+                  key={r.responder_id}
                   style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 10,
-                    background: "var(--c-bg-surface)",
                     display: "flex",
                     alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 600,
-                    color: "#14b8a6",
+                    gap: 10,
+                    padding: "10px 12px",
+                    background: "rgba(255,255,255,0.02)",
+                    borderRadius: 10,
                   }}
                 >
-                  {initials}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{r.display_name}</div>
-                  <div style={{ fontSize: 11, color: "var(--c-ink-muted)" }}>
-                    {r.role} · {r.languages.join("/")}
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                  <span
+                  <div
                     style={{
-                      fontSize: 9,
-                      color: r.on_shift ? "#10b981" : "var(--c-ink-muted)",
-                      fontFamily: "var(--font-mono)",
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: "var(--c-bg-surface)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: 600,
+                      color: "#14b8a6",
                     }}
                   >
-                    ● {r.on_shift ? "ON SHIFT" : "OFF"}
-                  </span>
-                  <span style={{ fontSize: 9, color: "var(--c-ink-muted)", fontFamily: "var(--font-mono)" }}>
-                    {r.skills.length} skills
+                    {initials}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{r.display_name}</div>
+                    <div style={{ fontSize: 11, color: "var(--c-ink-muted)" }}>
+                      {r.role} · {r.languages.join("/")}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                    <span
+                      style={{
+                        fontSize: 9,
+                        color: r.on_shift ? "#10b981" : "var(--c-ink-muted)",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      ● {r.on_shift ? "ON SHIFT" : "OFF"}
+                    </span>
+                    <span style={{ fontSize: 9, color: "var(--c-ink-muted)", fontFamily: "var(--font-mono)" }}>
+                      {r.skills.length} skills
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div
+            style={{
+              marginTop: 16,
+              padding: 14,
+              background: "rgba(20,184,166,0.06)",
+              borderRadius: 12,
+              border: "1px solid rgba(20,184,166,0.2)",
+            }}
+          >
+            <Eyebrow style={{ color: "#14b8a6" }}>Nearby services</Eyebrow>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8, fontSize: 12 }}>
+              {[
+                ...VENUE.nearby_services.ambulance,
+                ...VENUE.nearby_services.fire,
+                ...VENUE.nearby_services.police,
+              ].map((s, i) => (
+                <div
+                  key={i}
+                  style={{ display: "flex", justifyContent: "space-between", color: "var(--c-ink-secondary)" }}
+                >
+                  <span>{s.name}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", color: "var(--c-ink-muted)" }}>
+                    {s.phone} · {s.distance_km}km
                   </span>
                 </div>
-              </div>
-            );
-          })}
+              ))}
+            </div>
+          </div>
         </div>
 
-        <div
-          style={{
-            marginTop: 16,
-            padding: 14,
-            background: "rgba(20,184,166,0.06)",
-            borderRadius: 12,
-            border: "1px solid rgba(20,184,166,0.2)",
-          }}
-        >
-          <Eyebrow style={{ color: "#14b8a6" }}>Nearby services</Eyebrow>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8, fontSize: 12 }}>
-            {[
-              ...VENUE.nearby_services.ambulance,
-              ...VENUE.nearby_services.fire,
-              ...VENUE.nearby_services.police,
-            ].map((s, i) => (
-              <div
-                key={i}
-                style={{ display: "flex", justifyContent: "space-between", color: "var(--c-ink-secondary)" }}
-              >
-                <span>{s.name}</span>
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--c-ink-muted)" }}>
-                  {s.phone} · {s.distance_km}km
-                </span>
-              </div>
-            ))}
-          </div>
+        <div className="glass" style={glassStyle({ padding: 20 })}>
+          <Eyebrow>Demo mode</Eyebrow>
+          <h3 style={{ fontSize: 18, fontWeight: 600, marginTop: 6, marginBottom: 14 }}>Classroom presentation</h3>
+          <p style={{ fontSize: 12, color: "var(--c-ink-secondary)", lineHeight: 1.55, marginBottom: 12 }}>
+            Seed synthetic incidents to guarantee a populated dashboard for demos without live camera feeds.
+          </p>
+          <button
+            onClick={handleSeed}
+            disabled={seeding || seedNeeded === false}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "8px 14px",
+              borderRadius: 10,
+              fontSize: 12,
+              fontWeight: 500,
+              border: "1px solid rgba(20,184,166,0.35)",
+              cursor: seeding || seedNeeded === false ? "not-allowed" : "pointer",
+              background: seedNeeded === false ? "rgba(16,185,129,0.12)" : "rgba(20,184,166,0.15)",
+              color: seedNeeded === false ? "#10b981" : "#14b8a6",
+              fontFamily: "inherit",
+              opacity: seeding ? 0.6 : 1,
+            }}
+          >
+            {seeding ? "Seeding..." : seedNeeded === false ? "Demo data ready" : "Seed demo incidents"}
+          </button>
+          {seedNeeded === null && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--c-ink-muted)" }}>Checking...</div>
+          )}
         </div>
       </div>
     </div>
@@ -1488,13 +1546,59 @@ function AnalyticsTab({ incidents }: { incidents: Incident[] }) {
     bySev[sevOf(i)]++;
   });
   const max = Math.max(1, ...Object.values(byCat));
+
+  // Real metrics from incident data
+  const now = Date.now();
+  const openIncidents = incidents.filter((i) => !["CLOSED", "DISMISSED"].includes(i.status));
+
+  // Calculate dispatch latency p50 and p95 from incidents with dispatches
+  const dispatched = incidents.filter((i) => i.dispatch?.paged_at);
+  const dispatchLatencies = dispatched.map((i) => {
+    const detected = toEpoch(i.detected_at);
+    const paged = toEpoch(i.dispatch?.paged_at ?? i.detected_at);
+    return (paged - detected) / 1000;
+  });
+
+  const avgLatency = dispatchLatencies.length > 0
+    ? Math.round(dispatchLatencies.reduce((a, b) => a + b, 0) / dispatchLatencies.length)
+    : null;
+  const sortedLatencies = [...dispatchLatencies].sort((a, b) => a - b);
+  const p50Idx = Math.floor(sortedLatencies.length * 0.5);
+  const p95Idx = Math.floor(sortedLatencies.length * 0.95);
+  const dispatchP50 = sortedLatencies.length > 0 ? Math.round(sortedLatencies[p50Idx]) : null;
+  const dispatchP95 = sortedLatencies.length > 0 ? Math.round(sortedLatencies[p95Idx]) : null;
+
+  // SLA: percentage of incidents acknowledged within 60 seconds for S1, 5 minutes for others
+  const slaMetCount = incidents.filter((i) => {
+    const sev = sevOf(i);
+    const threshold = sev === "S1" ? 60 : 300;
+    const ackTime = toEpoch(i.acknowledged_at ?? i.detected_at);
+    const detected = toEpoch(i.detected_at);
+    return (ackTime - detected) / 1000 <= threshold;
+  }).length;
+  const slaPercent = incidents.length > 0 ? Math.round((slaMetCount / incidents.length) * 100) : null;
+
+  // FPR: false positive rate (dismissed / total closed)
+  const closed = incidents.filter((i) => i.status === "CLOSED" || i.status === "DISMISSED");
+  const dismissed = incidents.filter((i) => i.status === "DISMISSED").length;
+  const fpr = closed.length > 0 ? (dismissed / closed.length).toFixed(2) : null;
+
+  // Show demo values when no real data
+  const hasRealData = incidents.length > 3;
+  const displayP50 = dispatchP50 ?? (hasRealData ? null : "43s");
+  const displayP95 = dispatchP95 ?? (hasRealData ? null : "71s");
+  const displaySLA = slaPercent !== null ? `${slaPercent}%` : (hasRealData ? "—" : "96%");
+  const displayFPR = fpr ?? (hasRealData ? "—" : "0.8");
+
   return (
     <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
       <div className="glass" style={glassStyle({ padding: 20 })}>
         <Eyebrow>By category (all-time)</Eyebrow>
         <h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 6, marginBottom: 14 }}>Incident distribution</h3>
         {Object.keys(byCat).length === 0 ? (
-          <div style={{ fontSize: 13, color: "var(--c-ink-muted)" }}>No data yet</div>
+          <div style={{ fontSize: 13, color: "var(--c-ink-muted)" }}>
+            {hasRealData ? "No data yet" : "Demo data"}
+          </div>
         ) : (
           Object.entries(byCat).map(([c, n]) => (
             <div key={c} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -1536,12 +1640,12 @@ function AnalyticsTab({ incidents }: { incidents: Incident[] }) {
           ))}
         </div>
         <div style={{ marginTop: 18, padding: 14, background: "rgba(255,255,255,0.02)", borderRadius: 10 }}>
-          <Eyebrow>Pilot scorecard</Eyebrow>
+          <Eyebrow>Operations scorecard {hasRealData ? "" : "(demo)"}</Eyebrow>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8, fontSize: 13 }}>
-            <Score v="43s" c="#14b8a6" l="Dispatch p50" />
-            <Score v="71s" c="#f59e0b" l="Dispatch p95" />
-            <Score v="96%" c="#10b981" l="SLA met" />
-            <Score v="0.8" c="#3b82f6" l="FPR (per day)" />
+            <Score v={displayP50 ?? "—"} c="#14b8a6" l="Dispatch p50" />
+            <Score v={displayP95 ?? "—"} c="#f59e0b" l="Dispatch p95" />
+            <Score v={displaySLA} c="#10b981" l="SLA met" />
+            <Score v={displayFPR} c="#3b82f6" l="FPR" />
           </div>
         </div>
       </div>

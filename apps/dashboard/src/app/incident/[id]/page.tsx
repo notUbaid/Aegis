@@ -586,6 +586,26 @@ export default function IncidentDetailPage() {
               </div>
             ) : null}
 
+            <div className="glass" style={glassStyle({ padding: 20 })}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <Eyebrow>Pipeline trace</Eyebrow>
+                <span style={{ fontSize: 10, color: "#14b8a6", fontFamily: "var(--font-mono)" }}>
+                  ● BACKEND OPERATIONS
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <PipelineStep step={1} label="INGEST" detail={`frame received from ${zone.camera_ids[0] ?? 'zone camera'}`} ok />
+                <PipelineStep step={2} label="VISION" detail={incident.classification?.rationale ? `Gemini: ${incident.classification.category}` : "classifier working"} />
+                <PipelineStep step={3} label="ORCHESTRATOR" detail={`severity=${incident.classification?.severity} · confidence=${conf}%`} />
+                <PipelineStep step={4} label="DISPATCH" detail={dispatches.length > 0 ? `${dispatches.length} responders paged` : "pending dispatch"} ok={dispatches.length > 0} />
+              </div>
+              {incident.audit_hash ? (
+                <div style={{ marginTop: 12, padding: "8px 10px", background: "rgba(20,184,166,0.05)", borderRadius: 8, fontSize: 11, color: "var(--c-ink-muted)", fontFamily: "var(--font-mono)" }}>
+                  <span style={{ color: "#14b8a6" }}>audit_hash</span> · {incident.audit_hash}
+                </div>
+              ) : null}
+            </div>
+
             {(() => {
               const classifiedEvent = events.find((e) => e.to_status === "CLASSIFIED");
               const agentTrace = classifiedEvent?.payload?.agent_trace as string[] | undefined;
@@ -1123,6 +1143,45 @@ function NoteBox({ incidentId }: { incidentId: string }) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ── Pipeline Step ────────────────────────────────────────────────────────
+function PipelineStep({ step, label, detail, ok }: { step: number; label: string; detail: string; ok?: boolean }) {
+  const passed = ok === true;
+  const color = passed ? "#10b981" : ok === false ? "#dc2626" : "#64748b";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10 }}>
+      <div
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 6,
+          background: color,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          fontWeight: 700,
+          color: "#0a0e14",
+          flexShrink: 0,
+        }}
+      >
+        {step}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--c-ink-primary)" }}>{label}</div>
+        <div style={{ fontSize: 11, color: "var(--c-ink-muted)" }}>{detail}</div>
+      </div>
+      {passed ? (
+        <span style={{ fontSize: 10, color: "#10b981", fontFamily: "var(--font-mono)" }}>✓</span>
+      ) : ok === false ? (
+        <span style={{ fontSize: 10, color: "#dc2626", fontFamily: "var(--font-mono)" }}>✗</span>
+      ) : (
+        <span style={{ fontSize: 10, color: "#64748b", fontFamily: "var(--font-mono)" }}>→</span>
+      )}
     </div>
   );
 }

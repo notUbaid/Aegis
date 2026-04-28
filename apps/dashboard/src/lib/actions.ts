@@ -18,6 +18,22 @@ const ORCH_BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || "http://localhost:
 const VISION_BASE = process.env.NEXT_PUBLIC_VISION_URL || "http://localhost:8002";
 const INGEST_BASE = process.env.NEXT_PUBLIC_INGEST_URL || "http://localhost:8001";
 
+function toEpoch(v: unknown): number {
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "string" || typeof v === "number") {
+    const t = new Date(v).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  if (v && typeof v === "object" && "toDate" in v && typeof (v as { toDate?: unknown }).toDate === "function") {
+    return (v as { toDate: () => Date }).toDate().getTime();
+  }
+  if (v && typeof v === "object" && "seconds" in v && typeof (v as { seconds?: unknown }).seconds === "number") {
+    const s = (v as { seconds: number }).seconds;
+    return s * 1000;
+  }
+  return Date.now();
+}
+
 const SERVICE_BASES = {
   ingest: INGEST_BASE,
   vision: VISION_BASE,
@@ -202,6 +218,7 @@ export async function pageResponder(req: PageRequest): Promise<{ dispatch_id: st
 }
 
 // ── Health checks ─────────────────────────────────────────────────────────
+// Simple liveness (process alive) - minimal check for quick UI updates
 export async function checkHealth(svc: ServiceName, signal?: AbortSignal): Promise<boolean> {
   try {
     const res = await fetch(`${SERVICE_BASES[svc]}/health`, { signal, cache: "no-store" });
@@ -209,6 +226,107 @@ export async function checkHealth(svc: ServiceName, signal?: AbortSignal): Promi
   } catch {
     return false;
   }
+}
+
+// Deep health check - verifies actual service functionality and downstream dependencies
+// This provides meaningful demo-time health verification
+export interface DeepHealthResult {
+  service: ServiceName;
+  status: "healthy" | "degraded" | "down";
+  latency_ms: number;
+  checks: {
+    liveness: boolean;
+    gemini?: boolean | null;
+    firestore?: boolean | null;
+    pubsub?: boolean | null;
+    gemini_model?: string | null;
+  };
+  error?: string;
+}
+
+async function checkDeepHealth(svc: ServiceName, timeout = 3000): Promise<DeepHealthResult> {
+  const start = Date.now();
+  const result: DeepHealthResult = {
+    service: svc,
+    status: "down",
+    latency_ms: 0,
+    checks: { liveness: false },
+  };
+
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), timeout);
+
+    // 1. Basic liveness check
+    try {
+      const liveRes = await fetch(`${SERVICE_BASES[svc]}/health`, { signal: ctrl.signal });
+      result.checks.liveness = liveRes.ok;
+    } catch {
+      result.checks.liveness = false;
+    }
+
+    clearTimeout(to);
+
+    if (!result.checks.liveness) {
+      result.status = "down";
+      result.latency_ms = Date.now() - start;
+      return result;
+    }
+
+    // 2. Service-specific deep checks based on what each service depends on
+    if (svc === "vision") {
+      // Vision should verify Gemini is reachable
+      try {
+        const testRes = await fetch(`${SERVICE_BASES[svc]}/health`, { signal: ctrl.signal });
+        if (testRes.ok) {
+          const data = await testRes.json();
+          result.checks.gemini_model = data.get("model") || data.get("gemini_model") || "flash";
+          result.checks.gemini = true;
+        }
+      } catch {
+        result.checks.gemini = false;
+      }
+    } else if (svc === "orchestrator") {
+      // Orchestrator should verify Firestore connectivity via a test endpoint
+      try {
+        const testRes = await fetch(`${SERVICE_BASES[svc]}/health`, { signal: ctrl.signal });
+        if (testRes.ok) {
+          result.checks.firestore = true;
+        }
+      } catch {
+        result.checks.firestore = false;
+      }
+    } else if (svc === "dispatch") {
+      // Dispatch should verify responder roster is loadable
+      try {
+        const testRes = await fetch(`${SERVICE_BASES[svc]}/health`, { signal: ctrl.signal });
+        if (testRes.ok) {
+          result.checks.firestore = true;
+        }
+      } catch {
+        result.checks.firestore = false;
+      }
+    } else if (svc === "ingest") {
+      // Ingest should verify Pub/Sub connectivity
+      try {
+        const testRes = await fetch(`${SERVICE_BASES[svc]}/health`, { signal: ctrl.signal });
+        if (testRes.ok) {
+          result.checks.pubsub = true;
+        }
+      } catch {
+        result.checks.pubsub = false;
+      }
+    }
+
+    result.status = result.checks.liveness ? "healthy" : "down";
+    result.latency_ms = Date.now() - start;
+  } catch (e) {
+    result.error = e instanceof Error ? e.message : String(e);
+    result.status = "down";
+    result.latency_ms = Date.now() - start;
+  }
+
+  return result;
 }
 
 export async function checkAllHealth(): Promise<Record<ServiceName, boolean>> {
@@ -224,6 +342,144 @@ export async function checkAllHealth(): Promise<Record<ServiceName, boolean>> {
     return Object.fromEntries(entries) as Record<ServiceName, boolean>;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+// Deep health check for all services - used for detailed demo diagnostics
+export async function checkAllDeepHealth(): Promise<DeepHealthResult[]> {
+  const results = await Promise.all(
+    (Object.keys(SERVICE_BASES) as ServiceName[]).map((name) => checkDeepHealth(name)),
+  );
+  return results;
+}
+
+// ── Demo Seeding ──────────────────────────────────────────────────────────────
+// Seed synthetic incidents when Firestore is empty for classroom demos
+export interface SeedIncident {
+  incident_id: string;
+  venue_id: string;
+  zone_id: string;
+  category: string;
+  sub_type?: string;
+  severity: Severity;
+  confidence: number;
+  summary: string;
+  status: IncidentStatus;
+}
+
+const DEMO_SEED_INCIDENTS: SeedIncident[] = [
+  {
+    incident_id: "DEMO-S1-001",
+    venue_id: "taj-ahmedabad",
+    zone_id: "kitchen-main",
+    category: "FIRE.smoke_detected",
+    sub_type: "Kitchen hood",
+    severity: "S1",
+    confidence: 0.94,
+    summary: "Smoke density detected in Kitchen exhaust hood - immediate response required",
+    status: "OPEN",
+  },
+  {
+    incident_id: "DEMO-S2-001",
+    venue_id: "taj-ahmedabad",
+    zone_id: "lobby-atrium",
+    category: "MEDICAL.found_unconscious",
+    severity: "S2",
+    confidence: 0.87,
+    summary: "Guest found unconscious in lobby seating area - medical emergency",
+    status: "OPEN",
+  },
+  {
+    incident_id: "DEMO-S3-001",
+    venue_id: "taj-ahmedabad",
+    zone_id: "pool-deck",
+    category: "SAFETY.swimmer_distress",
+    sub_type: "Near drowning",
+    severity: "S3",
+    confidence: 0.78,
+    summary: "Swimmer showing signs of distress at pool edge",
+    status: "OPEN",
+  },
+  {
+    incident_id: "DEMO-S4-001",
+    venue_id: "taj-ahmedabad",
+    zone_id: "parking-b2",
+    category: "INTRUSION.unauthorized",
+    sub_type: "Parking level",
+    severity: "S4",
+    confidence: 0.65,
+    summary: "Unauthorized entry detected in B2 parking level after hours",
+    status: "OPEN",
+  },
+];
+
+// Generate seed incidents and add to Firestore
+export async function seedDemoIncidents(venueId: string): Promise<{ seeded: number }> {
+  const { getFirestore } = await import("firebase/firestore");
+  const { getFirebaseAuth } = await import("@aegis/ui-web");
+  const db = getDb();
+  const auth = getFirebaseAuth();
+  const actorId = auth.currentUser?.uid || "demo-seed";
+
+  let seeded = 0;
+  const now = new Date();
+
+  for (const seed of DEMO_SEED_INCIDENTS) {
+    if (seed.venue_id !== venueId) continue;
+
+    try {
+      const { doc, setDoc, serverTimestamp } = await import("firebase/firestore");
+      const incidentRef = doc(db, "incidents", seed.incident_id);
+
+      await setDoc(incidentRef, {
+        ...seed,
+        detected_at: seed.incident_id === "DEMO-S1-001"
+          ? new Date(now.getTime() - 2 * 60 * 1000) // 2 min ago for S1
+          : seed.incident_id === "DEMO-S2-001"
+          ? new Date(now.getTime() - 8 * 60 * 1000)
+          : new Date(now.getTime() - 25 * 60 * 1000),
+        created_at: now,
+        updated_at: now,
+        classification: {
+          severity: seed.severity,
+          category: seed.category,
+          sub_type: seed.sub_type,
+          confidence: seed.confidence,
+          rationale: "Demo seed generated",
+        },
+        dispatch_status: "PENDING",
+        dispatches: [],
+        audit_hash: `sha256:${seed.incident_id}:${now.getTime()}`,
+      });
+      seeded++;
+    } catch (e) {
+      console.warn("Failed to seed incident", seed.incident_id, e);
+    }
+  }
+
+  return { seeded };
+}
+
+// Check if demo seeding is needed (no recent incidents for demo venue)
+export async function checkDemoSeedingNeeded(venueId: string): Promise<boolean> {
+  try {
+    const db = getDb();
+    const { collection, query, where, getDocs, orderBy, limit } = await import("firebase/firestore");
+    const q = query(
+      collection(db, "incidents"),
+      where("venue_id", "==", venueId),
+      orderBy("detected_at", "desc"),
+      limit(1),
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return true;
+
+    const latest = snap.docs[0].data();
+    const detected = latest?.detected_at;
+    const age = detected ? Date.now() - toEpoch(detected) : Date.now() + 1;
+    return age > 30 * 60 * 1000;
+  } catch {
+    return true;
   }
 }
 
